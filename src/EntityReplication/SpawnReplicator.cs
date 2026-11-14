@@ -225,6 +225,7 @@ namespace SeapowerMultiplayer
                 {
                     a.AircraftAnimation.setAnimsForFlight();
                     a.giveControl(speedKts);
+                    RetractCodeAnimGear(a);
                 }
                 else if (result is Helicopter h)
                 {
@@ -241,6 +242,34 @@ namespace SeapowerMultiplayer
             Telemetry.Count("v2.spawnUnit");
             Plugin.Log.LogInfo($"[SpawnReplicator] Spawned {(UnitType)msg.UnitKind} replica id={msg.EntityId} " +
                 $"ini={msg.UnitIniName} deck={deckPhase}");
+        }
+
+        /// <summary>Put an airborne replica's undercarriage away.
+        ///
+        /// Aircraft have TWO gear rigs. setAnimsForFlight only drives the old clip
+        /// one (<c>&lt;mesh&gt;_gear</c>); models on the newer code-animation rig keep
+        /// their gear in <c>_codeAnimations["Gear_Extend"]</c>, which a freshly
+        /// created airframe has in the EXTENDED state. Every stock spawner that puts
+        /// a plane straight into the air closes it by hand right after createAircraft
+        /// (SceneCreator.initAircraft, CivilianRoute.SpawnUnit,
+        /// Taskforce.SpawnAirSupportAircraft) - and does it by reaching into the
+        /// dictionary, not through ObjectBase.SetCodeAnim / PlayCodeAnim, so the
+        /// host's FlightOpsAnim capture never sees it and no event comes down for it.
+        /// The guest therefore flew those aircraft around with the wheels out.
+        ///
+        /// The same gap swallowed deck launches whose replica was built late (a
+        /// census replay after wheels-up): the takeoff's Gear_Retract event had gone
+        /// past before there was anything to play it on.
+        ///
+        /// This is the stock call, on the same object, at the same point in its
+        /// life. An aircraft that really is on final when its replica is built gets
+        /// its gear back from the host's Approach events, which do go through the
+        /// captured funnels.</summary>
+        private static void RetractCodeAnimGear(Aircraft a)
+        {
+            var anims = a._obp?._codeAnimations;
+            if (anims != null && anims.TryGetValue("Gear_Extend", out var gear) && gear != null)
+                gear.setClosedState();
         }
 
         /// <summary>Chaff clouds / noisemakers: cosmetic local instances that run
