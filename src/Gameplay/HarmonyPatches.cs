@@ -1125,8 +1125,9 @@ namespace SeapowerMultiplayer
             // and this was the one flight-ops path with no gate on it at all: a client's
             // press was relayed and refused upstream (silently, with no notice), while
             // the HOST's press ran natively right here - so the host could cancel any
-            // player's launches. BlocksOrdersFor has no host exemption for that reason.
-            if (FormationOwnership.BlocksOrdersFor(carrier))
+            // player's launches. BlocksClickFor, not BlocksOrdersFor: the Abort button
+            // is a click wherever it is pressed from, so it takes no simulation exemption.
+            if (FormationOwnership.BlocksClickFor(carrier))
             {
                 OrderRefusalNotice.Note(carrier);
                 return false;
@@ -3733,7 +3734,7 @@ namespace SeapowerMultiplayer
         static bool Prefix(FlightDeck __instance)
         {
             var carrier = __instance?._baseObject;
-            if (!FormationOwnership.BlocksOrdersFor(carrier)) return true;
+            if (!FormationOwnership.BlocksClickFor(carrier)) return true;
             OrderRefusalNotice.Note(carrier);
             return false;
         }
@@ -3755,7 +3756,7 @@ namespace SeapowerMultiplayer
         static bool Prefix(PendingLaunchTask __instance)
         {
             var carrier = __instance?._flightDeck?._baseObject;
-            if (!FormationOwnership.BlocksOrdersFor(carrier)) return true;
+            if (!FormationOwnership.BlocksClickFor(carrier)) return true;
             OrderRefusalNotice.Note(carrier);
             return false;
         }
