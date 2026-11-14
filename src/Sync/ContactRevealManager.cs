@@ -26,6 +26,12 @@ namespace SeapowerMultiplayer
     /// the local, uncertain fix takes over. So the two players see the same SET of
     /// contacts, and each player's own sensors still decide how well they see them.
     ///
+    /// WEAPONS TOO, host to teammates. A guest's copy of a missile or torpedo is an
+    /// inert replica whose seeker never radiates, so the guest's own ESM and
+    /// intercept sonar cannot hear it the way the host's do
+    /// (<see cref="ContactSyncManager.IsSharedWeapon"/>); without the reveal a
+    /// teammate simply had no track for a weapon the host was watching come in.
+    ///
     /// CO-OP ONLY, like the rest of the shared picture: in PvP the two pictures are
     /// meant to differ and sharing one would hand over intel the other side has not
     /// earned.
@@ -45,6 +51,19 @@ namespace SeapowerMultiplayer
         /// contact has to be re-revealed well inside that or it flickers.
         /// </summary>
         internal const float RefreshInterval = 3f;
+
+        /// <summary>
+        /// Refresh cadence for weapons, which get a sweep of their own.
+        ///
+        /// A revealed track is a position fix, not a motion model: between reveals
+        /// the contact sits where it was last put. Three seconds is invisible on a
+        /// ship and tolerable on an aircraft, but a missile covers the better part
+        /// of a kilometre in that time and a new one would wait up to a full
+        /// interval before it showed at all - most of the warning a sea-skimmer
+        /// gives. Weapons are few and short-lived, so refreshing them faster costs
+        /// little.
+        /// </summary>
+        internal const float WeaponRefreshInterval = 1f;
 
         /// <summary>Nothing here is authoritative, so it is safe to drop a sweep;
         /// this is only to stop a huge first report fragmenting.</summary>
@@ -67,7 +86,7 @@ namespace SeapowerMultiplayer
         public static void ApplyReceived(ContactReportMessage msg)
         {
             if (!Plugin.Instance.CfgIsHost.Value) return;
-            if (!ContactSyncManager.CoopSessionActive) return;
+            if (!ContactSyncManager.TeamSessionActive) return;
 
             _remoteHeld.Clear();
             for (int i = 0; i < msg.UniqueIds.Count; i++)
@@ -114,10 +133,18 @@ namespace SeapowerMultiplayer
         /// <summary>
         /// Materialise contacts the remote side holds and we do not, and drop the
         /// ones our own sensors have since found.
+        ///
+        /// Units and weapons are swept separately because they are refreshed at
+        /// different rates (<see cref="RefreshInterval"/> against
+        /// <see cref="WeaponRefreshInterval"/>); <paramref name="weapons"/> picks
+        /// which half of the remote list this call covers. Only a guest ever has
+        /// weapons in that list - the host's picture carries them down, and the
+        /// guest's report up to the host is still units only, because the host
+        /// simulates every weapon for real and needs no help finding one.
         /// </summary>
-        public static void Tick()
+        public static void Tick(bool weapons)
         {
-            if (!ContactSyncManager.CoopSessionActive) return;
+            if (!ContactSyncManager.TeamSessionActive) return;
             if (_remoteHeld.Count == 0) return;
 
             var table = Globals._playerTaskforce?.PlottingTable;
@@ -128,7 +155,13 @@ namespace SeapowerMultiplayer
             foreach (int id in _remoteHeld)
             {
                 var obj = StateSerializer.FindById(id);
-                if (obj == null || obj.IsDestroyed || !obj.isUnit()) continue;
+                if (obj == null || obj.IsDestroyed) continue;
+
+                bool isWeapon = !obj.isUnit();
+                if (isWeapon != weapons) continue;
+                // Not everything that is not a unit is a weapon worth plotting:
+                // this is what keeps chaff, wake bubbles and rounds still on a rail out.
+                if (isWeapon && !ContactSyncManager.IsSharedWeapon(obj)) continue;
                 if (obj._taskforce == Globals._playerTaskforce) continue;
 
                 // Our own sensors are on it - let the local fix stand, errors and

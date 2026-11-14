@@ -22,11 +22,12 @@ namespace SeapowerMultiplayer
         {
             StartCoroutine(ContactLoop());
             StartCoroutine(RevealLoop());
+            StartCoroutine(WeaponRevealLoop());
             StartCoroutine(DrawingLoop());
         }
 
         private static bool SessionLive()
-            => ContactSyncManager.CoopSessionActive
+            => ContactSyncManager.TeamSessionActive
                && SimSyncManager.CurrentState == SimState.Synchronized
                && !SessionManager.SceneLoading;
 
@@ -81,9 +82,29 @@ namespace SeapowerMultiplayer
                 try
                 {
                     if (!Plugin.Instance.CfgIsHost.Value) ContactRevealManager.ClientSendReport();
-                    ContactRevealManager.Tick();
+                    ContactRevealManager.Tick(weapons: false);
                 }
                 catch (Exception ex) { Plugin.Log.LogWarning($"[Contacts] Reveal sweep failed: {ex.Message}"); }
+            }
+        }
+
+        /// <summary>
+        /// Host → teammates: the weapons half of the same reveal, on its own faster
+        /// clock. Guests only - the host is never told about a weapon it does not
+        /// already hold, so there is nothing for it to sweep.
+        /// </summary>
+        private IEnumerator WeaponRevealLoop()
+        {
+            var wait = new WaitForSeconds(ContactRevealManager.WeaponRefreshInterval);
+            while (true)
+            {
+                yield return wait;
+                if (Plugin.Instance.CfgIsHost.Value) continue;
+                if (!Plugin.Instance.CfgContactSync.Value) continue;
+                if (!SessionLive()) continue;
+
+                try { ContactRevealManager.Tick(weapons: true); }
+                catch (Exception ex) { Plugin.Log.LogWarning($"[Contacts] Weapon reveal sweep failed: {ex.Message}"); }
             }
         }
 
