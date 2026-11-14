@@ -24,12 +24,12 @@ namespace SeapowerMultiplayer
     /// the host has not therefore stays identified rather than visibly regressing
     /// to unknown, and the client ends up seeing the union of both pictures.
     ///
-    /// Limitation: a contact the host has detected and the client has not still
-    /// shows nothing on the client. Contacts only exist as ECS track entities
-    /// created by the sensor pipeline, and the mod does not reference
-    /// Unity.Entities - there is no way to synthesize one. Both machines run the
-    /// same sensors over the same units, so this is a timing gap, not a
-    /// permanent hole; it closes as soon as the client's own sensors see it.
+    /// This only reconciles contacts both machines hold. One the host has detected
+    /// and the client has not is materialised by <see cref="ContactRevealManager"/>,
+    /// which reads the host's contact list straight off the override table kept
+    /// here - so whatever this sweep covers is what a teammate can be shown. That
+    /// is units AND other sides' in-flight weapons; see <see cref="IsSharedWeapon"/>
+    /// for why weapons cannot be left to the client's own sensors.
     /// </summary>
     public static class ContactSyncManager
     {
@@ -425,7 +425,7 @@ namespace SeapowerMultiplayer
                 var obj = kv.Key;
                 var vehicle = kv.Value;
                 if (obj == null || vehicle == null) continue;
-                if (!obj.isUnit()) continue;          // weapons churn the table; their track numbers are throwaway
+                if (!obj.isUnit() && !IsSharedWeapon(obj)) continue; // chaff, wake bubbles, our own rounds
                 if (obj.UniqueID == 0) continue;
 
                 int id = obj.UniqueID;
@@ -467,6 +467,35 @@ namespace SeapowerMultiplayer
             if (_msg.Entries.Count > 0 || (full && _sweepPacketsSent == 0))
                 Flush();
         }
+
+        /// <summary>
+        /// A weapon that belongs in the shared picture: somebody else's missile,
+        /// torpedo or bomb, in flight.
+        ///
+        /// Weapons used to be left out of the picture altogether ("they churn the
+        /// table"), on the theory that both machines run the same sensors over the
+        /// same objects and so find the same weapons. They do not. A guest's copy of
+        /// a weapon is an inert replica - its OnFixedUpdate is suppressed, so its
+        /// seeker never switches on - and the two loudest ways a ship learns about
+        /// an incoming weapon are exactly the ones that need a live seeker: ESM
+        /// hearing a missile's radar, and an intercept sonar hearing a torpedo ping
+        /// (Sonar.createListOfPotentialContacts admits a torpedo only while
+        /// <c>_seeker.isActive()</c>). The host hears both and plots the weapon;
+        /// the guest is left with radar horizon and close-in passive noise, so a
+        /// teammate regularly had no track at all for a torpedo or sea-skimmer the
+        /// host was watching come in.
+        ///
+        /// Own-side rounds are excluded because every machine already plots those
+        /// from truth, and unlaunched ones because a round on a rail is not a
+        /// contact. Chaff, noisemakers and ejecting pilots are not classified
+        /// weapons (WeaponClassOf == null) and stay local, as they always have.
+        /// </summary>
+        internal static bool IsSharedWeapon(ObjectBase? obj)
+            => obj is WeaponBase wb
+               && !wb.IsDestroyed
+               && wb.isLaunched()
+               && CaptureState.WeaponClassOf(wb) != null
+               && wb._taskforce != Globals._playerTaskforce;
 
         /// <summary>Make the next sweep a full one, so a joining teammate receives the
         /// whole picture instead of only what changes from now on.</summary>
