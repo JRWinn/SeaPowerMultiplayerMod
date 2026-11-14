@@ -800,6 +800,19 @@ namespace SeapowerMultiplayer.UI
     </StackPanel>
   </Border>
 
+  <!-- What's new: once per set of notes, at launch. Text comes from ChangeNotes so
+       announcing a change never means editing this markup. -->
+  <Border Style=""{StaticResource Popup}"" Width=""420"" Visibility=""{Binding ChangeNotesVisibility}"">
+    <StackPanel>
+      <TextBlock Style=""{StaticResource PopupTitle}"" Text=""{Binding ChangeNotesTitle}""/>
+      <TextBlock TextWrapping=""Wrap"" Text=""{Binding ChangeNotesText}""/>
+      <TextBlock Style=""{StaticResource Dim}"" Margin=""0,8,0,0"" TextWrapping=""Wrap""
+                 Text=""{Binding ChangeNotesFootnote}""/>
+      <Button Style=""{StaticResource Btn}"" Content=""Got it"" Margin=""0,10,0,0""
+              Command=""{Binding DismissChangeNotesCommand}""/>
+    </StackPanel>
+  </Border>
+
   <!-- Ally lock: fires from ordinary clicking, so it auto-expires and never
        needs dismissing. Kept low and clear of the unit panels. -->
   <Border Width=""470"" CornerRadius=""6"" Padding=""12,8""

@@ -153,6 +153,7 @@ namespace SeapowerMultiplayer
         // Opt-in diagnostics
         internal ConfigEntry<bool>   CfgShareDiagnostics = null!;
         internal ConfigEntry<bool>   CfgDiagnosticsAsked = null!;
+        internal ConfigEntry<string> CfgSeenChangeNotes = null!;
         internal ConfigEntry<string> CfgInstallId        = null!;
         internal ConfigEntry<string> CfgDiagnosticsUrl   = null!;
 
@@ -273,6 +274,8 @@ namespace SeapowerMultiplayer
                 "file paths are scrubbed before anything leaves this PC.");
             CfgDiagnosticsAsked = Config.Bind("Diagnostics", "Asked", false,
                 "Internal: the one-time consent prompt has been shown. Delete to see it again.");
+            CfgSeenChangeNotes = Config.Bind("UI", "SeenChangeNotes", "",
+                "Internal: id of the last 'what's new' card dismissed at launch. Delete to see it again.");
             CfgInstallId = Config.Bind("Diagnostics", "InstallId", "",
                 "Internal: random anonymous id, generated the first time diagnostics are enabled. " +
                 "Quote it to have your data deleted. Delete this line to get a new one.");

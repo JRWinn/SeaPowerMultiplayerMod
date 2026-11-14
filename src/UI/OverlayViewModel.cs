@@ -94,6 +94,7 @@ namespace SeapowerMultiplayer.UI
 
         public DelegateCommand EnableDiagnosticsCommand  { get; }
         public DelegateCommand DeclineDiagnosticsCommand { get; }
+        public DelegateCommand DismissChangeNotesCommand { get; }
 
         public OverlayViewModel()
         {
@@ -173,6 +174,9 @@ namespace SeapowerMultiplayer.UI
                 Analytics.DeclineConsent();
                 Raise(nameof(ShareDiagnostics));
             });
+            // Refresh straight away rather than on the next 100 ms tick, so the card
+            // goes the instant it is clicked - same as DismissFatalCommand.
+            DismissChangeNotesCommand = new DelegateCommand(_ => { ChangeNotes.Dismiss(); Refresh(true); });
         }
 
         // ── Panel chrome ─────────────────────────────────────────────────────
@@ -821,12 +825,22 @@ namespace SeapowerMultiplayer.UI
         private Visibility _consent = Visibility.Collapsed;
         public Visibility ConsentVisibility { get => _consent; private set => Set(ref _consent, value); }
 
+        // "What's new" card - see ChangeNotes. The strings are constants, so they are
+        // plain getters and never raise a change.
+        private Visibility _changeNotes = Visibility.Collapsed;
+        public Visibility ChangeNotesVisibility { get => _changeNotes; private set => Set(ref _changeNotes, value); }
+
+        public string ChangeNotesTitle    => ChangeNotes.Title;
+        public string ChangeNotesText     => ChangeNotes.Text;
+        public string ChangeNotesFootnote => ChangeNotes.Footnote;
+
         /// <summary>True when something must be on screen even with the panel
         /// closed - the overlay camera stays enabled for these.</summary>
         public bool AnyPopupActive =>
             _timeVote  == Visibility.Visible || _connLost  == Visibility.Visible ||
             _mismatch  == Visibility.Visible || _allyLock  == Visibility.Visible ||
-            _fatalPopup == Visibility.Visible || _consent == Visibility.Visible;
+            _fatalPopup == Visibility.Visible || _consent == Visibility.Visible ||
+            _changeNotes == Visibility.Visible;
 
         // ── Refresh ──────────────────────────────────────────────────────────
 
@@ -885,6 +899,10 @@ namespace SeapowerMultiplayer.UI
             // than behind the panel-visible check: it has to appear in the main
             // menu with the panel closed, which is what AnyPopupActive drives.
             ConsentVisibility = Vis(Analytics.ShouldPromptConsent);
+
+            // "What's new" card. Evaluated here for the same reason: it belongs in
+            // the main menu at launch, panel open or not.
+            ChangeNotesVisibility = Vis(ChangeNotes.ShouldShow);
 
             // Time vote
             bool vote = TimeSyncManager.HasPendingProposal;
