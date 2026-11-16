@@ -171,7 +171,16 @@ namespace SeapowerMultiplayer
             _suppressPoll = true;
             try
             {
-                layer.Graphics.Clear();
+                // The layer's own Clear(), NOT Graphics.Clear(). The layer takes a
+                // drawing off the map in its collection-changed handler, and that
+                // handler only walks the event's OldItems - which a collection Clear()
+                // does not supply (it raises Reset with no item list). So clearing the
+                // collection directly emptied the list and left every old drawing
+                // still attached to the map: visible, but no longer in the list the
+                // eraser works on. Each update from the other player left another
+                // layer of those behind - drawings that could be seen and never
+                // removed. MapDrawingLayer.Clear() detaches each one first.
+                layer.Clear();
 
                 // LoadDrawingData reads the live mission ini. Swapping the section
                 // is safe: it is only consulted at load time, and a save writes the

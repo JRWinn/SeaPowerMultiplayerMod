@@ -42,6 +42,7 @@ namespace SeapowerMultiplayer
         /// </summary>
         public static void NotifyOwnershipChanged(int uniqueId)
         {
+            SeapowerMultiplayer.UI.FormationManagerFilter.OnOwnershipChanged(uniqueId);
             foreach (var vm in _instances)
             {
                 var obj = vm.Unit?.BaseObject as ObjectBase;
@@ -55,6 +56,7 @@ namespace SeapowerMultiplayer
         /// working out which ones actually moved.</summary>
         public static void NotifyAll()
         {
+            SeapowerMultiplayer.UI.FormationManagerFilter.OnOwnershipReset();
             foreach (var vm in _instances)
                 _onPropertyChanged?.Invoke(vm, new object[] { "ContactInfoLine2" });
         }

@@ -1125,8 +1125,9 @@ namespace SeapowerMultiplayer
             // and this was the one flight-ops path with no gate on it at all: a client's
             // press was relayed and refused upstream (silently, with no notice), while
             // the HOST's press ran natively right here - so the host could cancel any
-            // player's launches. BlocksOrdersFor has no host exemption for that reason.
-            if (FormationOwnership.BlocksOrdersFor(carrier))
+            // player's launches. BlocksClickFor, not BlocksOrdersFor: the Abort button
+            // is a click wherever it is pressed from, so it takes no simulation exemption.
+            if (FormationOwnership.BlocksClickFor(carrier))
             {
                 OrderRefusalNotice.Note(carrier);
                 return false;
@@ -1775,6 +1776,14 @@ namespace SeapowerMultiplayer
             // dying weapon holding its task list, and each refusal logged under a fresh
             // entity id (3,663 lines in that same log) because every round is new.
             if (unit is WeaponBase) return true;
+            // ...and the same for everything else that is not a unit. WakeBubble is an
+            // ObjectBase, ships shed them continuously, and each one that expires goes
+            // through setDestroyedFlag, which clears waypoints - so every dying wake
+            // bubble sent a RemoveWaypoints order to the other machine, where its id
+            // either resolved to nothing or to some unrelated pooled object. One
+            // guest's log from a single battle: 591 such orders received, every one
+            // rejected. Only the six unit classes isUnit() names can be ordered.
+            if (!unit.isUnit()) return true;
             // Client: units we don't own are host-driven replicas. An order reaching
             // here for one came from our own local sim (unit state machines tick
             // outside the suppressed AI class) - block it locally AND upstream.
@@ -1843,6 +1852,7 @@ namespace SeapowerMultiplayer
                 return;
             }
 
+            if (!unit.isUnit()) return; // wake bubbles and the like - see Prefix
             if (FormationInternal.Active) return; // derived formation state - see FormationInternal
             if (DoctrineCycle.Drives(unit)) return; // derived standing-order cycle - see DoctrineCycle
             if (!Plugin.Instance.CfgIsHost.Value) return;
@@ -2052,12 +2062,20 @@ namespace SeapowerMultiplayer
         private static readonly Dictionary<(int, OrderType, int), Fingerprint> _cache = new();
         private static readonly Dictionary<(int, OrderType, int), float> _lastSendTime = new();
 
+        /// <summary>A guest's order whose value changed inside the rate floor, held
+        /// until the floor lifts - see <see cref="ShouldSend"/> and <see cref="Tick"/>.</summary>
+        private static readonly Dictionary<(int, OrderType, int), (PlayerOrderMessage msg, float due)> _held = new();
+        private static readonly List<(int, OrderType, int)> _dueKeys = new();
+
+        // Sensor and EMCON floors sit inside SensorStateManager's 6 s local-echo hold
+        // on purpose: a held order then reaches the host before the reassert would
+        // drag the switch back to the value the host still has.
         private static float GetMinInterval(OrderType order) => order switch
         {
-            OrderType.SensorToggle    => 10f,
+            OrderType.SensorToggle    => 3f,
             OrderType.DeleteWaypoint  => 1f,
             OrderType.SetSpeed        => 0.5f,
-            OrderType.SetEMCON        => 10f,
+            OrderType.SetEMCON        => 3f,
             _                         => 0f,
         };
 
@@ -2117,26 +2135,93 @@ namespace SeapowerMultiplayer
 
             var key = MakeKey(msg);
             var fp  = MakeFingerprint(msg);
+            float minInterval = GetMinInterval(msg.Order);
+            float lastTime = 0f;
+            bool insideFloor = minInterval > 0f && _lastSendTime.TryGetValue(key, out lastTime) &&
+                               Time.unscaledTime - lastTime < minInterval;
+
+            // DeleteWaypoint is an ACTION on an index, not a setting with a value.
+            // Deleting the first waypoint and then the new first waypoint is two
+            // deletes of index 0, and on value-dedup the second matched the first for
+            // the rest of the battle and was never sent - the route kept a leg on the
+            // host that the player had removed. Only a repeat of the same index inside
+            // the floor is the same click arriving twice.
+            if (msg.Order == OrderType.DeleteWaypoint)
+            {
+                if (insideFloor && _cache.TryGetValue(key, out var lastDelete) && lastDelete.Matches(fp))
+                    return false;
+                _cache[key] = fp;
+                _lastSendTime[key] = Time.unscaledTime;
+                return true;
+            }
 
             if (_cache.TryGetValue(key, out var last) && last.Matches(fp))
-                return false;
-
-            float minInterval = GetMinInterval(msg.Order);
-            if (minInterval > 0f && _lastSendTime.TryGetValue(key, out var lastTime) &&
-                Time.unscaledTime - lastTime < minInterval)
             {
-                // The value CHANGED and we are still dropping it. For a player-issued
-                // order that is a lost command, not flood control - say so, because a
-                // silent drop here is indistinguishable from a broken order path.
+                // Back to the value the other side already holds: whatever was waiting
+                // to go out in between is no longer wanted.
+                _held.Remove(key);
+                return false;
+            }
+
+            if (insideFloor)
+            {
+                // The value CHANGED inside the floor. Dropping it here is a lost
+                // command, not flood control: the order still runs locally (the caller
+                // only skips the send), so a guest who switched a radar on and off
+                // again saw it go off and then come back on by itself a few seconds
+                // later, when the sensor reassert restored the only value the host had
+                // ever heard. Hold the newest value instead and send it when the floor
+                // lifts - the rate is still bounded at one send per floor, and the
+                // last word is no longer lost.
+                //
+                // Guests only. The host's own changes reach everyone through the state
+                // streams whether or not this particular broadcast goes out.
+                if (!Plugin.Instance.CfgIsHost.Value)
+                {
+                    _held[key] = (msg, lastTime + minInterval);
+                    return false;
+                }
+
                 Plugin.Log.LogWarning($"[Order] rate-limited: entity={msg.SourceEntityId} " +
                     $"order={msg.Order} value={msg.Speed} suppressed " +
                     $"({Time.unscaledTime - lastTime:F2}s < {minInterval:F2}s since last send)");
                 return false;
             }
 
+            _held.Remove(key);
             _cache[key] = fp;
             _lastSendTime[key] = Time.unscaledTime;
             return true;
+        }
+
+        /// <summary>Guest, every frame: send the held orders whose floor has lifted.</summary>
+        internal static void Tick()
+        {
+            if (_held.Count == 0) return;
+            if (Plugin.Instance.CfgIsHost.Value || !NetworkManager.Instance.IsEstablished
+                || SessionManager.SceneLoading)
+            {
+                _held.Clear();
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            foreach (var kv in _held)
+                if (now >= kv.Value.due) _dueKeys.Add(kv.Key);
+
+            for (int i = 0; i < _dueKeys.Count; i++)
+            {
+                var key = _dueKeys[i];
+                var msg = _held[key].msg;
+                _held.Remove(key);
+                _cache[key] = MakeFingerprint(msg);
+                _lastSendTime[key] = now;
+                // SendToServer keeps its own backstops (ownership, local-only ids), so
+                // an order that stopped being ours to give while it waited is dropped
+                // there rather than here.
+                NetworkManager.Instance.SendToServer(msg);
+            }
+            _dueKeys.Clear();
         }
 
         /// <summary>
@@ -2163,6 +2248,7 @@ namespace SeapowerMultiplayer
             OrderHandler.ClearRejectThrottle();
             _cache.Clear();
             _lastSendTime.Clear();
+            _held.Clear();
         }
 
         private static (int, OrderType, int) MakeKey(PlayerOrderMessage msg)
@@ -3197,6 +3283,32 @@ namespace SeapowerMultiplayer
         new[] { typeof(Order.Type), typeof(ObjectBase), typeof(bool) })]
     public static class Patch_ObjectBase_SetOrder_RTB
     {
+        /// <summary>HOST: refuse the host player's own RTB click on a unit somebody
+        /// else commands.
+        ///
+        /// This patch was postfix-only, and a postfix cannot refuse anything - by the
+        /// time it asks the ownership gate, the order has run. On a guest that is
+        /// covered elsewhere (the unit reads as uncontrollable and Order.setOrder
+        /// drops the call), but that flag is deliberately not forced on the host, so
+        /// the host's click went straight through: the aircraft turned for home on
+        /// the authoritative sim while the log said "refused by notOwner" and the
+        /// player was shown the "being commanded by" notice. One session's host log
+        /// has exactly that pair, two lines apart, for a teammate's Lynx.
+        ///
+        /// Host only. A guest's copy of a teammate's unit is a replica whose own state
+        /// machines also reach setOrder(ReturnToBase); what they do locally is not
+        /// this patch's business to change. The simulation's own RTB on the host is
+        /// not refused either - BlocksOrdersFor exempts it.</summary>
+        static bool Prefix(ObjectBase __instance, Order.Type type)
+        {
+            if (type != Order.Type.ReturnToBase) return true;
+            if (!Plugin.Instance.CfgIsHost.Value) return true;
+            if (!FormationOwnership.BlocksOrdersFor(__instance)) return true;
+
+            OrderRefusalNotice.Note(__instance);
+            return false;
+        }
+
         static void Postfix(ObjectBase __instance, Order.Type type, ObjectBase targetObject, bool displayOrderText)
         {
             if (OrderHandler.ApplyingFromNetwork) return;
@@ -3733,7 +3845,7 @@ namespace SeapowerMultiplayer
         static bool Prefix(FlightDeck __instance)
         {
             var carrier = __instance?._baseObject;
-            if (!FormationOwnership.BlocksOrdersFor(carrier)) return true;
+            if (!FormationOwnership.BlocksClickFor(carrier)) return true;
             OrderRefusalNotice.Note(carrier);
             return false;
         }
@@ -3755,7 +3867,7 @@ namespace SeapowerMultiplayer
         static bool Prefix(PendingLaunchTask __instance)
         {
             var carrier = __instance?._flightDeck?._baseObject;
-            if (!FormationOwnership.BlocksOrdersFor(carrier)) return true;
+            if (!FormationOwnership.BlocksClickFor(carrier)) return true;
             OrderRefusalNotice.Note(carrier);
             return false;
         }

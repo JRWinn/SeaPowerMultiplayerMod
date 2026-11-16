@@ -232,6 +232,29 @@ namespace SeapowerMultiplayer
             // flight time - no RTT term is needed, and the link's jitter therefore
             // never reaches the extrapolation distance.
             double hostSec = msg.GameSeconds;
+
+            // MIDNIGHT. The stamp is seconds since midnight, so when the mission clock
+            // rolls over the host's stamps fall from ~86400 to ~0. Every ordering guard
+            // downstream reads that as "older than what I have" and drops it - weapons
+            // froze where they were for the rest of their flight and units stopped
+            // being corrected until the next pause or compression change happened to
+            // flush the buffers. A rollover is the same event as a clock snap: all
+            // buffered stamps are in a day that is over. Flush once and carry on.
+            if (_lastBatchHostSec >= 0d)
+            {
+                double step = hostSec - _lastBatchHostSec;
+                if (step < -DayGameSeconds * 0.5)
+                {
+                    OnMissionClockRolledOver("host stamps passed midnight");
+                }
+                else if (step > DayGameSeconds * 0.5)
+                {
+                    // Yesterday's packet arriving after today's first one.
+                    Telemetry.Count("v2.staleBatchDropped");
+                    return;
+                }
+            }
+
             TrackCadence(hostSec);
 
             for (int i = 0; i < msg.Entries.Count; i++)
@@ -265,6 +288,9 @@ namespace SeapowerMultiplayer
                     continue;
                 }
                 if (unit is WeaponBase) continue; // ID collision safety
+
+                // Still parked here while the host is flying it - see UnitEnableSync.
+                UnitEnableSync.ClientEnsureEnabled(unit);
 
                 // Deck puppets: a world-space sample means the host flew this unit
                 // off (or it's a stale pre-touchdown packet) - the driver decides
@@ -531,8 +557,29 @@ namespace SeapowerMultiplayer
                 _renderClockValid = false;
                 return;
             }
+
+            // The other half of the midnight rollover (see Apply): this machine's own
+            // clock passing midnight. The two never happen on the same frame, and the
+            // clock offset measured across the gap between them is a whole day wide.
+            double local = LocalMissionSeconds();
+            if (!double.IsNaN(local))
+            {
+                if (!double.IsNaN(_lastLocalMissionSec) && local < _lastLocalMissionSec - DayGameSeconds * 0.5)
+                    OnMissionClockRolledOver("local clock passed midnight");
+                _lastLocalMissionSec = local;
+            }
+
             float dt = Time.unscaledDeltaTime;
             if (dt > 0f) AdvanceRenderClock(dt);
+        }
+
+        private static double _lastLocalMissionSec = double.NaN;
+
+        private static void OnMissionClockRolledOver(string why)
+        {
+            Plugin.Log.LogInfo($"[UnitReplica] {why} - re-basing the replica clocks.");
+            OnMissionClockSnapped();
+            WeaponReplicaDriver.OnHostClockRebased();
         }
 
         private static void AdvanceRenderClock(float dtReal)
@@ -698,6 +745,10 @@ namespace SeapowerMultiplayer
             // Extrapolate forward from the newest snapshot.
             float age = (float)(renderMissionSec - newest.HostMissionSec);
             if (age < -DayGameSeconds * 0.5f) age += DayGameSeconds; // midnight rollover
+            // ...and the other way round: the host's stamps are already in the new day
+            // and this machine's clock is not yet. Uncorrected that reads as a sample a
+            // day old and extrapolates to the cap.
+            if (age > DayGameSeconds * 0.5f) age -= DayGameSeconds;
             if (age < 0f) age = 0f;
             float rawAge = age;
             age = Mathf.Min(age, MaxExtrapolationRealSec * Mathf.Max(1f, GameTime.TimeCompression));

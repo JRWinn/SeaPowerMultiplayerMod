@@ -94,6 +94,8 @@ namespace SeapowerMultiplayer.UI
 
         public DelegateCommand EnableDiagnosticsCommand  { get; }
         public DelegateCommand DeclineDiagnosticsCommand { get; }
+        public DelegateCommand DismissChangeNotesCommand { get; }
+        public DelegateCommand CycleFormationViewCommand { get; }
 
         public OverlayViewModel()
         {
@@ -173,6 +175,10 @@ namespace SeapowerMultiplayer.UI
                 Analytics.DeclineConsent();
                 Raise(nameof(ShareDiagnostics));
             });
+            // Refresh straight away rather than on the next 100 ms tick, so the card
+            // goes the instant it is clicked - same as DismissFatalCommand.
+            DismissChangeNotesCommand = new DelegateCommand(_ => { ChangeNotes.Dismiss(); Refresh(true); });
+            CycleFormationViewCommand = new DelegateCommand(_ => { FormationManagerFilter.Cycle(); Refresh(true); });
         }
 
         // ── Panel chrome ─────────────────────────────────────────────────────
@@ -818,15 +824,35 @@ namespace SeapowerMultiplayer.UI
         private string _allyLockText = "";
         public string AllyLockText { get => _allyLockText; private set => Set(ref _allyLockText, value); }
 
+        // Formation Manager owner filter - see FormationManagerFilter.
+        private string _formationViewText = "";
+        public string FormationViewText { get => _formationViewText; private set => Set(ref _formationViewText, value); }
+
+        private Visibility _formationViewNotice = Visibility.Collapsed;
+        public Visibility FormationViewNoticeVisibility { get => _formationViewNotice; private set => Set(ref _formationViewNotice, value); }
+
+        private string _formationViewNoticeText = "";
+        public string FormationViewNoticeText { get => _formationViewNoticeText; private set => Set(ref _formationViewNoticeText, value); }
+
         private Visibility _consent = Visibility.Collapsed;
         public Visibility ConsentVisibility { get => _consent; private set => Set(ref _consent, value); }
+
+        // "What's new" card - see ChangeNotes. The strings are constants, so they are
+        // plain getters and never raise a change.
+        private Visibility _changeNotes = Visibility.Collapsed;
+        public Visibility ChangeNotesVisibility { get => _changeNotes; private set => Set(ref _changeNotes, value); }
+
+        public string ChangeNotesTitle    => ChangeNotes.Title;
+        public string ChangeNotesText     => ChangeNotes.Text;
+        public string ChangeNotesFootnote => ChangeNotes.Footnote;
 
         /// <summary>True when something must be on screen even with the panel
         /// closed - the overlay camera stays enabled for these.</summary>
         public bool AnyPopupActive =>
             _timeVote  == Visibility.Visible || _connLost  == Visibility.Visible ||
             _mismatch  == Visibility.Visible || _allyLock  == Visibility.Visible ||
-            _fatalPopup == Visibility.Visible || _consent == Visibility.Visible;
+            _fatalPopup == Visibility.Visible || _consent == Visibility.Visible ||
+            _changeNotes == Visibility.Visible;
 
         // ── Refresh ──────────────────────────────────────────────────────────
 
@@ -847,7 +873,7 @@ namespace SeapowerMultiplayer.UI
 
             RefreshPopups(nm);
 
-            VersionText = $"SeaPower MP  v{PluginInfo.PLUGIN_VERSION}";
+            VersionText = $"SeaPower MP  v{PluginInfo.PLUGIN_VERSION}  build {BuildStamp.Value}";
             bool seated = nm.IsEstablished;
             TeamBadgeText = seated ? Teams.Name(PlayerRegistry.LocalTeam).ToUpperInvariant() : "";
             TeamBadgeVisibility = Vis(seated);
@@ -885,6 +911,10 @@ namespace SeapowerMultiplayer.UI
             // than behind the panel-visible check: it has to appear in the main
             // menu with the panel closed, which is what AnyPopupActive drives.
             ConsentVisibility = Vis(Analytics.ShouldPromptConsent);
+
+            // "What's new" card. Evaluated here for the same reason: it belongs in
+            // the main menu at launch, panel open or not.
+            ChangeNotesVisibility = Vis(ChangeNotes.ShouldShow);
 
             // Time vote
             bool vote = TimeSyncManager.HasPendingProposal;
@@ -925,6 +955,13 @@ namespace SeapowerMultiplayer.UI
 
             // Fatal popup
             FatalPopupVisibility = Vis(Plugin.FatalInitError != null && !_fatalDismissed);
+
+            // Formation Manager view: the settings button's label, and the short
+            // notice that confirms a Ctrl+F8 press.
+            FormationViewText = FormationManagerFilter.ButtonText;
+            bool viewNotice = Time.unscaledTime < FormationManagerFilter.NoticeUntil;
+            FormationViewNoticeVisibility = Vis(viewNotice);
+            if (viewNotice) FormationViewNoticeText = FormationManagerFilter.NoticeText;
 
             // Order-refused banner - auto-expires, never dismissed.
             bool refused = Time.unscaledTime < OrderRefusalNotice.NoticeUntil;

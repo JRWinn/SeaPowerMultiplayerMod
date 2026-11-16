@@ -173,6 +173,43 @@ namespace SeapowerMultiplayer
 
         public static void DismissVersionMismatch() => VersionMismatchNotice = null;
 
+        // ── Build stamp ──────────────────────────────────────────────────────
+        //
+        // The protocol version says two builds CAN talk; it does not say they are the
+        // same build. Between releases the plugin version does not move either, so a
+        // guest one test build behind the host connected cleanly and then simply did
+        // not have the fixes - with nothing on either screen to say so.
+        //
+        // The stamp rides in fields that already exist: appended to the guest's
+        // PluginVersion string (which the host has only ever logged), and as a
+        // trailing-optional field on the Welcome. A build with no stamp reads as "",
+        // which is reported as a mismatch too - against a stamped build, it is one.
+
+        private const string BuildTagPrefix = " build ";
+
+        private static string BuildOf(string? pluginVersion)
+        {
+            if (string.IsNullOrEmpty(pluginVersion)) return "";
+            int at = pluginVersion!.IndexOf(BuildTagPrefix, System.StringComparison.Ordinal);
+            return at < 0 ? "" : pluginVersion.Substring(at + BuildTagPrefix.Length);
+        }
+
+        /// <summary>The warning for a peer on a different build, or null when it matches.</summary>
+        private static string? BuildMismatch(string? theirBuild, string who)
+        {
+            if (theirBuild == BuildStamp.Value) return null;
+            string theirs = string.IsNullOrEmpty(theirBuild)
+                ? "an unstamped (older or Workshop) build"
+                : $"build {theirBuild}";
+            return $"Different mod builds: you are on build {BuildStamp.Value}, {who} is on {theirs}. " +
+                   "Both players should be running the same SeapowerMultiplayer.dll.";
+        }
+
+        /// <summary>Both warnings a handshake can raise, one above the other - a mod-set
+        /// warning must not hide a build one, which is the likelier cause of trouble.</summary>
+        private static string? Combine(string? build, string? mods)
+            => build == null ? mods : mods == null ? build : build + "\n" + mods;
+
         // ── Packet-loss sampling (rolling window for the F9 overlay) ─────────────
 
         private readonly List<(float time, long sent, long lost)> _lossSamples = new();
@@ -381,6 +418,7 @@ namespace SeapowerMultiplayer
             if (_transport == null) return;
             if (BlockedPreHandshake(msg.Type)) return;
             if (BlockedByOwnership(msg)) return;
+            if (OrderForLocalOnlyObject(msg)) return;
             if (!Serialize(msg)) return;
             _transport.SendToServer(_writer.Data, _writer.Length, MapDelivery(delivery));
             Telemetry.OnSend((byte)msg.Type, _writer.Length);
@@ -549,6 +587,37 @@ namespace SeapowerMultiplayer
         }
 
         /// <summary>
+        /// GUEST: an order about an object that exists only on this machine.
+        ///
+        /// Everything a guest creates for itself is numbered out of its own id band
+        /// (GuestIdFloor), and nothing in that band exists on the host - replicas take
+        /// the HOST's id, and a guest never creates units of its own. So an order
+        /// carrying such an id cannot be resolved upstream, ever.
+        ///
+        /// They are sent constantly all the same. A replica is built through the
+        /// game's own creator and only renumbered to the host's id afterwards, and
+        /// the creator clears waypoints and stamps speed and sensors on the way - all
+        /// through the patched order methods, all under the temporary local id. One
+        /// session's host log: 213 "id not found" warnings for this band, 205 of them
+        /// RemoveWaypoints landing straight after an aircraft spawn, and not one order
+        /// for the band that resolved.
+        ///
+        /// Dropped at the send, like the ownership backstop below and for the same
+        /// reason - every order path funnels through here, so none can be missed. The
+        /// order still ran locally; it only stops crossing the wire.
+        /// </summary>
+        private static bool OrderForLocalOnlyObject(INetMessage msg)
+        {
+            int floor = GuestIdFloor.Floor;
+            if (floor <= 0) return false;                         // host, or no session
+            if (msg is not PlayerOrderMessage order) return false;
+            if (order.SourceEntityId < floor) return false;
+
+            Telemetry.Count("net.sendSkippedLocalOnly");
+            return true;
+        }
+
+        /// <summary>
         /// Ownership backstop. Order patches are supposed to refuse locally AND not
         /// send, but each one re-implements its own gating and the ones with bespoke
         /// send logic kept forgetting - so an order the local player was refused still
@@ -667,7 +736,7 @@ namespace SeapowerMultiplayer
                     var hello = new HelloMessage
                     {
                         ProtocolVersion = ProtocolInfo.ProtocolVersion,
-                        PluginVersion   = PluginInfo.PLUGIN_VERSION,
+                        PluginVersion   = PluginInfo.PLUGIN_VERSION + BuildTagPrefix + BuildStamp.Value,
                         RequestedTeam   = (byte)requested,
                         GameVersion     = ProtocolInfo.GameVersion,
                         GameplayOptions = 0,   // reserved: superseded by DoctrineSync
@@ -754,6 +823,7 @@ namespace SeapowerMultiplayer
                 SensorStateManager.Reset();
                 JamStateManager.Reset();
                 UnitStatusManager.Reset();
+                UnitEnableSync.Reset();
                 OrderRefusalNotice.Reset();
                 AttackDesignationSync.Reset();
                 WeaponStatusSync.Reset();
@@ -1294,6 +1364,7 @@ namespace SeapowerMultiplayer
                 ModFingerprint  = ModSetCheck.LocalFingerprint(),
                 ModCount        = (byte)Mathf.Min(ModSetCheck.LocalMods().Count, 255),
                 DisableF10Menu  = Plugin.Instance.CfgDisableF10Menu.Value,
+                HostBuild       = BuildStamp.Value,
             });
 
             // Everyone learns who just joined - including the joiner, whose own identity
@@ -1310,8 +1381,14 @@ namespace SeapowerMultiplayer
             {
                 Telemetry.Count("handshake.modMismatch");
                 Log.LogWarning($"[Mods] {modWarning}");
-                VersionMismatchNotice = modWarning;
             }
+            var buildWarning = BuildMismatch(BuildOf(msg.PluginVersion), seated.DisplayName);
+            if (buildWarning != null)
+            {
+                Telemetry.Count("handshake.buildMismatch");
+                Log.LogWarning($"[Build] {buildWarning}");
+            }
+            VersionMismatchNotice = Combine(buildWarning, modWarning);
             Log.LogInfo($"[Handshake] {seated.DisplayName} accepted as slot {seated.Slot} on {seated.Team} " +
                         $"(plugin {msg.PluginVersion}, protocol {msg.ProtocolVersion}, game {ProtocolInfo.GameVersion}). Established.");
             ReconnectManager.OnPeerEstablished();
@@ -1366,8 +1443,14 @@ namespace SeapowerMultiplayer
             {
                 Telemetry.Count("handshake.modMismatch");
                 Log.LogWarning($"[Mods] {modWarning}");
-                VersionMismatchNotice = modWarning;
             }
+            var buildWarning = BuildMismatch(msg.HostBuild, "the host");
+            if (buildWarning != null)
+            {
+                Telemetry.Count("handshake.buildMismatch");
+                Log.LogWarning($"[Build] {buildWarning}");
+            }
+            VersionMismatchNotice = Combine(buildWarning, modWarning);
             // Before the session load starts, which is the point - the guest allocates
             // ids all the way through a load, so a floor armed afterwards is too late.
             GuestIdFloor.Arm(msg.ClientUidBase);

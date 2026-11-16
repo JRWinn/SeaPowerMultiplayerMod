@@ -52,10 +52,30 @@ namespace SeapowerMultiplayer
         /// <summary>Called once per frame from Plugin.Update.</summary>
         public static void SampleInput()
         {
+            // anyKeyDown as well as the mouse: an order can be a hotkey. The DOWN edge
+            // only - a camera key is held for seconds at a time and says nothing about
+            // whether an order was just given.
             if (UnityEngine.Input.GetMouseButton(0) || UnityEngine.Input.GetMouseButton(1)
-                || UnityEngine.Input.GetMouseButtonUp(0) || UnityEngine.Input.GetMouseButtonUp(1))
+                || UnityEngine.Input.GetMouseButtonUp(0) || UnityEngine.Input.GetMouseButtonUp(1)
+                || UnityEngine.Input.anyKeyDown)
                 _lastPointerInputTime = UnityEngine.Time.unscaledTime;
         }
+
+        /// <summary>
+        /// Did the local player just press something?
+        ///
+        /// Read live as well as from the per-frame sample. The sample is taken in
+        /// Plugin.Update, and nothing guarantees that runs before the game has acted on
+        /// this frame's input - so on the very frame a key goes down or a button comes
+        /// up, the sample can still be showing last frame. FormationOwnership asks this
+        /// to tell the host player's order from the host simulation's, where missing
+        /// that frame would wave the player's order through.
+        /// </summary>
+        public static bool RecentPlayerInput =>
+            UnityEngine.Input.anyKeyDown
+            || UnityEngine.Input.GetMouseButtonUp(0) || UnityEngine.Input.GetMouseButtonUp(1)
+            || (_lastPointerInputTime >= 0f
+                && UnityEngine.Time.unscaledTime - _lastPointerInputTime <= InputRecencySec);
 
         /// <summary>Called when the ownership gate refuses an order. Safe to call every
         /// frame - a waypoint drag fires continuously, so the notice just keeps refreshing
@@ -64,9 +84,7 @@ namespace SeapowerMultiplayer
         /// team other than the local player's.</summary>
         public static void Note(ObjectBase? unit)
         {
-            if (_lastPointerInputTime < 0f
-                || UnityEngine.Time.unscaledTime - _lastPointerInputTime > InputRecencySec)
-                return;            
+            if (!RecentPlayerInput) return;
             if (!Teams.IsFriendly(unit)) return;
 
             LastRefusedUnitName  = unit == null ? "" : unit.Name?.Value ?? unit.name;

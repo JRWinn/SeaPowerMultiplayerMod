@@ -497,6 +497,14 @@ namespace SeapowerMultiplayer
                     var ws = systems[i];
                     if (ws == null || ws.Inoperable.Value) continue;
 
+                    // Nothing to train. alignToTarget goes straight to
+                    // _vwp._mountObject.transform and _vwp._mount.rotate, and a weapon
+                    // system with no turret has neither - an aircraft's hardpoints, most
+                    // obviously. Every engaging Sea Harrier threw here once a second,
+                    // backed off, and threw again for as long as it was shooting.
+                    var vwp = ws._vwp;
+                    if (vwp == null || vwp._mountObject == null || vwp._mount == null) continue;
+
                     var aimKey = (e.UniqueId, i);
                     if (_aimBackoff.TryGetValue(aimKey, out var backoff)
                         && Time.unscaledTime < backoff.RetryAt) continue;

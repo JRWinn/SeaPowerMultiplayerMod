@@ -201,6 +201,9 @@ namespace SeapowerMultiplayer
             {
                 CaptureUnits(UnitType.Missile,    UnitRegistry.Missiles, false);
                 CaptureUnits(UnitType.Bomb,       UnitRegistry.Bombs,    false);
+                // Unguided rocket rounds ride the Bomb kind: to the client they are the
+                // same thing, an inert replica flown from this stream.
+                CaptureUnits(UnitType.Bomb,       UnitRegistry.Rockets,  false);
                 CaptureUnits(UnitType.Torpedo,    UnitRegistry.Torpedoes, false);
             }
 
@@ -320,6 +323,9 @@ namespace SeapowerMultiplayer
             {
                 var unit = units[i];
                 if (unit == null) continue;
+                // Held back by the mission (see UnitEnableSync). The guest reads a
+                // state sample as "this unit is live", so a parked one must not send.
+                if (unit.Disabled) continue;
                 if (nearOnly && !IsNearClient(unit.transform.position)) continue;
                 // Destroyed weapons leave the stream (Impact/Despawn events own the ending).
                 // Un-launched (mounted/racked) weapons are transform children of their

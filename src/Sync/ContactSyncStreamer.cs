@@ -111,10 +111,12 @@ namespace SeapowerMultiplayer
         /// <summary>Bidirectional: map drawings, sent by whichever side edited them.</summary>
         private IEnumerator DrawingLoop()
         {
-            var wait = new WaitForSeconds(DrawingInterval);
             while (true)
             {
-                yield return wait;
+                // Real time, not scaled: the game pauses by zeroing the time scale, and a
+                // pause is when people draw on the map. On WaitForSeconds this loop did
+                // not run at all while paused, so a teammate saw nothing until unpause.
+                yield return new WaitForSecondsRealtime(DrawingInterval);
                 if (!Plugin.Instance.CfgDrawingSync.Value) continue;
                 if (!SessionLive()) continue;
 

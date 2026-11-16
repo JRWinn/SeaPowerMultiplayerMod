@@ -458,6 +458,22 @@ namespace SeapowerMultiplayer
             return true;
         }
 
+        /// <summary>
+        /// GUEST: this machine is in the middle of loading a session the host sent.
+        ///
+        /// The load itself drives the clock - MissionManager.DoUnload stops time
+        /// compression on its way out of the old scene, and SceneCreator.LoadMission
+        /// pauses on its way into the new one. Those are the game tidying up locally,
+        /// but the patches below could not tell them from a player pressing a key, so
+        /// each went to the host as a request: the unload's "1x" un-paused a host that
+        /// had just paused to take the save, and it then ran until the load's pause
+        /// caught up with it. A guest's log from one refresh shows the host running
+        /// 8 game-seconds that way - long enough that every aircraft was 2-4 km from
+        /// where the save had put it and had to be snapped. Let them apply here only.
+        /// </summary>
+        private static bool LoadingLocally()
+            => !Plugin.Instance.CfgIsHost.Value && SessionManager.SceneLoading;
+
         [HarmonyPatch(typeof(GameTime), nameof(GameTime.SetTimeCompression))]
         public static class Patch_GameTime_SetTimeCompression
         {
@@ -466,6 +482,7 @@ namespace SeapowerMultiplayer
                 if (BlockedByFreeze()) return false;
                 if (!NetworkManager.Instance.IsConnected) return true;
                 if (_applyingFromNetwork) return true;
+                if (LoadingLocally()) return true;
                 if (ShouldSuppressForVoteMode())
                 {
                     SendProposal(timeScale);
@@ -504,6 +521,7 @@ namespace SeapowerMultiplayer
                 if (BlockedByFreeze()) return false;
                 if (!NetworkManager.Instance.IsConnected) return true;
                 if (_applyingFromNetwork) return true;
+                if (LoadingLocally()) return true;
                 if (ShouldSuppressForVoteMode())
                 {
                     SendProposal(-1f);
@@ -542,6 +560,7 @@ namespace SeapowerMultiplayer
                 if (BlockedByFreeze()) return false;
                 if (!NetworkManager.Instance.IsConnected) return true;
                 if (_applyingFromNetwork) return true;
+                if (LoadingLocally()) return true;
                 if (ShouldSuppressForVoteMode())
                 {
                     SendProposal(-2f);
@@ -588,6 +607,7 @@ namespace SeapowerMultiplayer
                 if (isHost) return true;
                 if (!connected) return true;
                 if (_applyingFromNetwork) return true;
+                if (LoadingLocally()) return true;
                 Plugin.Log.LogInfo("[TimeSync] CLIENT Pause intercepted → sending request to host");
                 TimeSyncManager.SendTimeRequest(0f);
                 return false; // suppress local pause
@@ -627,6 +647,7 @@ namespace SeapowerMultiplayer
                 if (isHost) return true;
                 if (!connected) return true;
                 if (_applyingFromNetwork) return true;
+                if (LoadingLocally()) return true;
                 Plugin.Log.LogInfo("[TimeSync] CLIENT StopTimeCompression intercepted → sending request to host");
                 TimeSyncManager.SendTimeRequest(1f);
                 return false;

@@ -132,12 +132,22 @@ namespace SeapowerMultiplayer
 
         public static void OnReplicaSpawned(WeaponBase wb, EntitySpawnMessage msg)
         {
+            // A spawn carries REAL lat/lon (the game's own conversion, see
+            // CapturePatches.Build); the state stream and everything below work in
+            // GeoCodec's wire encoding. The two are the same thing only on an
+            // equirectangular world, so go through Unity space to get from one to the
+            // other - otherwise, since game 0.9, the replica is seeded thousands of
+            // kilometres off and the first stream sample turns that into a full-size
+            // offset that it then has to slide out of.
+            var seed = GeoCodec.ToGeo(Utils.longLatToLocalV3(
+                new GeoPosition(msg.LatDeg, msg.LonDeg, msg.HeightM), Globals._currentCenterTile));
+
             _replicas[msg.EntityId] = new Replica
             {
                 Weapon     = wb,
                 IsMissile  = wb is Missile,
-                LonDeg     = msg.LonDeg,
-                LatDeg     = msg.LatDeg,
+                LonDeg     = seed._longitude,
+                LatDeg     = seed._latitude,
                 HeightM    = msg.HeightM,
                 HeadingDeg = GeoCodec.UnpackHeading(msg.HeadingQ),
                 PitchDeg   = GeoCodec.UnpackAngleCdeg(msg.PitchQ),
@@ -266,6 +276,17 @@ namespace SeapowerMultiplayer
             _lastPredErrM = Mathf.Sqrt(dx * dx + dz * dz);
         }
 
+        /// <summary>The host's mission clock passed midnight, so its stamps restart
+        /// near zero. Forget the last stamp on every replica - compared against one
+        /// from the day that just ended, every sample from here on would be dropped as
+        /// reordered and the weapon would hang at its last position until it despawned.
+        /// Until the next sample lands the replica coasts on time since arrival.</summary>
+        internal static void OnHostClockRebased()
+        {
+            foreach (var kv in _replicas) kv.Value.LastHostSec = double.NaN;
+            _pendingSamples.Clear();
+        }
+
         public static void Forget(int entityId)
         {
             _replicas.Remove(entityId);
@@ -364,7 +385,16 @@ namespace SeapowerMultiplayer
                 // feeds the map/sensor/threat maths, and the reactive properties
                 // feed the map UI (course/speed/altitude readouts - without them
                 // the map shows the launch heading forever).
-                wb._geoPosition = GeoCodec.ToGeo(tr.position);
+                //
+                // The GAME's conversion, not GeoCodec's. GeoCodec is the wire encoding:
+                // a linear function of tile coordinates, which was also the real
+                // lat/lon while the world was equirectangular. Since game 0.9 the
+                // world is a Lambert projection and the two differ by thousands of
+                // kilometres, so a replica stamped with the wire value sat in the
+                // right place in the 3D view and somewhere over the North Pacific for
+                // everything that reads its geo position - the map, the threat maths,
+                // and the contact reveal that shares the host's picture of it.
+                wb._geoPosition = Utils.worldPositionFromUnityToLongLat(tr.position, Globals._currentCenterTile);
                 wb.Heading.Value  = wb.getHeading();
                 wb.Velocity.Value = wb.getVelocityInKnots();
                 wb.Altitude.Value = wb.getHeightInFeet();

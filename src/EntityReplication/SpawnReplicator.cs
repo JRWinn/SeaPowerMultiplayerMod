@@ -34,12 +34,27 @@ namespace SeapowerMultiplayer
         private static readonly Queue<(int id, float realtime)> _tombstoneAge = new();
         private const float TombstoneRetainSec = 60f;
 
-        public static bool IsTombstoned(int id) => _tombstones.Contains(id);
+        public static bool IsTombstoned(int id)
+        {
+            // Expire on READ as well as on write. Expiry used to run only inside
+            // Tombstone(), so the 60 s retention held only while other things kept
+            // dying - in a quiet stretch a tombstone simply stayed. That did not
+            // matter while every tombstone was for something dead; it does now that a
+            // spawn which keeps failing is tombstoned as a back-off (CountSpawnFailure)
+            // and is meant to be tried again afterwards.
+            ExpireTombstones();
+            return _tombstones.Contains(id);
+        }
 
         public static void Tombstone(int id)
         {
             if (_tombstones.Add(id))
                 _tombstoneAge.Enqueue((id, Time.realtimeSinceStartup));
+            ExpireTombstones();
+        }
+
+        private static void ExpireTombstones()
+        {
             while (_tombstoneAge.Count > 0
                 && Time.realtimeSinceStartup - _tombstoneAge.Peek().realtime > TombstoneRetainSec)
             {
@@ -128,7 +143,23 @@ namespace SeapowerMultiplayer
                     case SpawnKind.Unit:   SpawnUnitReplica(msg);   break;
                     case SpawnKind.Decoy:  SpawnDecoyReplica(msg);  break;
                 }
-                _spawnFailures.Remove(msg.EntityId);
+
+                // Every spawner registers what it built, so nothing registered means
+                // it bailed out - and most of their bail-outs are a bare `return`
+                // (no ammo params, no shooter, no taskforce, a creator that came back
+                // null), not a throw. Those used to pass for success here: the
+                // failure count was reset and nothing was ever tombstoned, so the
+                // census asked again every other cycle for as long as the entity
+                // lived. One session's host log replayed two noisemakers 21 times each
+                // and a handful of aircraft 8-11 times.
+                if (ReplicaRegistry.Find(msg.EntityId) != null)
+                {
+                    _spawnFailures.Remove(msg.EntityId);
+                    return;
+                }
+
+                Telemetry.Count("v2.spawnFailedQuietly");
+                CountSpawnFailure(msg);
             }
             catch (Exception ex)
             {
@@ -142,16 +173,28 @@ namespace SeapowerMultiplayer
                 // 77 exceptions - until they expired host-side. A couple of retries
                 // give a late-arriving dependency (the shooter's own spawn) a
                 // chance; after that, tombstone so the census stops asking.
-                _spawnFailures.TryGetValue(msg.EntityId, out int failures);
-                _spawnFailures[msg.EntityId] = ++failures;
-                if (failures >= MaxSpawnAttempts)
-                {
-                    _spawnFailures.Remove(msg.EntityId);
-                    Tombstone(msg.EntityId);
-                    Plugin.Log.LogWarning($"[SpawnReplicator] id={msg.EntityId} failed to spawn " +
-                        $"{MaxSpawnAttempts} times - giving up (tombstoned)");
-                }
+                CountSpawnFailure(msg);
             }
+        }
+
+        /// <summary>One more failed attempt at this entity; give up on the third.
+        ///
+        /// Giving up is a tombstone, and a tombstone lapses (TombstoneRetainSec), so
+        /// this is a back-off rather than a verdict: an entity still in the host's
+        /// census after that gets another round of attempts, which is what lets a
+        /// spawn whose dependency turned up late recover without being asked for
+        /// every few seconds in the meantime.</summary>
+        private static void CountSpawnFailure(EntitySpawnMessage msg)
+        {
+            _spawnFailures.TryGetValue(msg.EntityId, out int failures);
+            _spawnFailures[msg.EntityId] = ++failures;
+            if (failures < MaxSpawnAttempts) return;
+
+            _spawnFailures.Remove(msg.EntityId);
+            Tombstone(msg.EntityId);
+            Plugin.Log.LogWarning($"[SpawnReplicator] id={msg.EntityId} kind={msg.Kind} " +
+                $"ammo={msg.AmmoName} ini={msg.UnitIniName} failed to spawn " +
+                $"{MaxSpawnAttempts} times - giving up for now (tombstoned)");
         }
 
         private static readonly Dictionary<int, int> _spawnFailures = new();
@@ -466,7 +509,10 @@ namespace SeapowerMultiplayer
             // only invent a malfunction alert and a lost connection the host never had.
             wb._launchCheckDone = true;
             wb._seekerCheckDone = true;
-            wb.setSensorData(wb.getWeaponInstance()._sensorData);
+            // Not every round has a weapon instance (chaff has none, and the unguided
+            // rocket classes are not guaranteed one).
+            var instance = wb.getWeaponInstance();
+            if (instance != null) wb.setSensorData(instance._sensorData);
             wb.setName(ap._displayedName);
             wb.setObjectIniName(ap._ammunitionFileName);
             if (shooter != null)

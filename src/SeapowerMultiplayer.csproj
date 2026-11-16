@@ -8,7 +8,12 @@
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Copy output DLL to BepInEx plugins folder after build -->
-    <!-- Adjust GameDir to match your Seapower install path -->
+    <!-- GameDir is your Sea Power install. If yours is elsewhere, don't edit this
+         line - override it without touching a tracked file: on the command line
+         (dotnet build -p:GameDir="D:\Games\Sea Power"), or once, in a
+         SeapowerMultiplayer.csproj.user next to this file, which MSBuild imports on
+         its own and .gitignore already excludes:
+           <Project><PropertyGroup><GameDir>D:\Games\Sea Power</GameDir></PropertyGroup></Project> -->
     <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Sea Power</GameDir>
   </PropertyGroup>
 
@@ -109,15 +114,20 @@
 
 
 	<PropertyGroup>
-    <GameDir2>C:\Users\hughe\Desktop\Sea Power</GameDir2>
+    <!-- Extra local test instances. These defaults are one developer's machine, so
+         every copy into them is conditioned on the folder existing. GameDir2's copies
+         used to be unconditional, which on anyone else's machine tried to create a
+         folder under another user's profile and failed the build at the deploy step.
+         Override like GameDir (see the top of this file) to point them at your own. -->
+    <GameDir2 Condition="'$(GameDir2)' == ''">C:\Users\hughe\Desktop\Sea Power</GameDir2>
     <!-- Third and fourth local test instances (Run Coop.bat launches all four).
-         Conditioned on existing, unlike the two above: these are only present on a
+         Conditioned on existing, like GameDir2: these are only present on a
          machine set up for 4-player local testing. Missing them silently is right;
          a stale DLL here is NOT silent - the protocol version is baked into the
          LiteNetLib connect key, so an out-of-date instance is rejected at connect
          and simply looks like the Connect button doing nothing. -->
-    <GameDir3>C:\Users\hughe\Desktop\Sea Power Player 3</GameDir3>
-    <GameDir4>C:\Users\hughe\Desktop\Sea Power Player 4</GameDir4>
+    <GameDir3 Condition="'$(GameDir3)' == ''">C:\Users\hughe\Desktop\Sea Power Player 3</GameDir3>
+    <GameDir4 Condition="'$(GameDir4)' == ''">C:\Users\hughe\Desktop\Sea Power Player 4</GameDir4>
   </PropertyGroup>
 
   <!-- Merge LiteNetLib into our assembly.
@@ -126,6 +136,23 @@
        ReflectionTypeLoadException at discovery and the mod is skipped entirely.
        No runtime resolver can help that (ours would not have been installed
        yet), so the reference has to not exist: ILRepack folds LiteNetLib in. -->
+  <!-- Stamp every build with the time it was made. The plugin version only changes
+       at a release, so two different test builds both call themselves 1.0.4 and
+       nothing could tell a player they were a build behind the host. The stamp is
+       shown on the what's-new card and in the overlay, and compared in the
+       handshake (see the build-stamp note in NetworkManager). -->
+  <Target Name="GenerateBuildStamp" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <BuildStampValue>$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm'))</BuildStampValue>
+      <BuildStampFile>$(IntermediateOutputPath)BuildStamp.g.cs</BuildStampFile>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(BuildStampFile)" Overwrite="true"
+        Lines="namespace SeapowerMultiplayer { internal static class BuildStamp { public const string Value = &quot;$(BuildStampValue)&quot;%3B } }" />
+    <ItemGroup>
+      <Compile Include="$(BuildStampFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="ILRepackMerge" AfterTargets="Build">
     <ItemGroup>
       <MergeInputs Include="$(OutputPath)$(AssemblyName).dll" />
@@ -161,9 +188,9 @@
       <ModFiles Include="..\workshop\_info.ini" />
     </ItemGroup>
     <Copy SourceFiles="@(ModFiles)" DestinationFolder="$(GameDir)\$(ModDir)\" />
-    <Copy SourceFiles="@(ModFiles)" DestinationFolder="$(GameDir2)\$(ModDir)\" />
+    <Copy SourceFiles="@(ModFiles)" DestinationFolder="$(GameDir2)\$(ModDir)\" Condition="Exists('$(GameDir2)')" />
     <Message Text="Copied plugin to $(GameDir)\$(ModDir)\" Importance="high" />
-    <Message Text="Copied plugin to $(GameDir2)\$(ModDir)\" Importance="high" />
+    <Message Text="Copied plugin to $(GameDir2)\$(ModDir)\" Importance="high" Condition="Exists('$(GameDir2)')" />
     <Copy SourceFiles="@(ModFiles)" DestinationFolder="$(GameDir3)\$(ModDir)\"
           Condition="Exists('$(GameDir3)')" />
     <Copy SourceFiles="@(ModFiles)" DestinationFolder="$(GameDir4)\$(ModDir)\"
@@ -220,7 +247,7 @@
       <ModMissions Include="..\missions\**\*" Exclude="..\missions\**\*.meta" />
     </ItemGroup>
     <Copy SourceFiles="@(ModMissions)" DestinationFiles="@(ModMissions->'$(GameDir)\$(MissionsDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
-    <Copy SourceFiles="@(ModMissions)" DestinationFiles="@(ModMissions->'$(GameDir2)\$(MissionsDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="@(ModMissions)" DestinationFiles="@(ModMissions->'$(GameDir2)\$(MissionsDir)\%(RecursiveDir)%(Filename)%(Extension)')" Condition="Exists('$(GameDir2)')" />
     <Message Text="Copied @(ModMissions->Count()) mission file(s) to $(MissionsDir)\" Importance="high" />
   </Target>
 

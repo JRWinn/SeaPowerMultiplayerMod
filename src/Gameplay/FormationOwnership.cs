@@ -93,12 +93,70 @@ namespace SeapowerMultiplayer
         /// <summary>
         /// THE gate: must this machine refuse an order for this unit?
         ///
-        /// Note there is no CfgIsHost test. The host is a player now and has to be
-        /// refused for its own local input exactly like anyone else - that role symmetry
-        /// is the whole point, and every earlier version of unit locking exempted the
-        /// host and was wrong for it.
+        /// The host PLAYER is refused exactly like anyone else - that role symmetry is
+        /// the whole point, and every earlier version of unit locking exempted the host
+        /// and was wrong for it. The host SIMULATION is not, and the difference matters:
+        /// see <see cref="HostSimulationIsCalling"/>.
         /// </summary>
-        public static bool BlocksOrdersFor(ObjectBase? unit)
+        public static bool BlocksOrdersFor(ObjectBase? unit) => Blocks(unit, clickOnly: false);
+
+        /// <summary>
+        /// The same gate for call sites that only a click can reach - the flight-ops
+        /// Ready / Launch / Abort buttons. No simulation exemption: autonomous launches
+        /// are already suppressed for a human-commanded side, so anything arriving at
+        /// those methods locally IS somebody pressing a button, whatever they happen to
+        /// have selected at the time.
+        /// </summary>
+        public static bool BlocksClickFor(ObjectBase? unit) => Blocks(unit, clickOnly: true);
+
+        /// <summary>
+        /// HOST: is this call the simulation's own, rather than the local player's?
+        ///
+        /// The order patches sit on the game's ordinary methods (RemoveWaypoints,
+        /// setTelegraph, setEMCON, setOrder...), and the game calls those itself all the
+        /// time - a state machine clearing a route as it enters its next state is the
+        /// same method call as a player pressing Clear. On a guest that does not matter:
+        /// a unit somebody else owns is a host-driven replica and nothing local should
+        /// touch it. On the host it is fatal, because the host's copy IS the unit. With
+        /// no way to tell the two apart the gate refused the authoritative simulation
+        /// for every unit a guest owned.
+        ///
+        /// Aircraft recovery is where it showed. BingoFuel / ReturnToBase, HoldingPattern
+        /// and Approach each open with RemoveWaypoints; all three were refused, so a
+        /// guest's helicopter went into its RTB with the game already having marked it
+        /// uncontrollable and its recovery states unable to clear the old route - and
+        /// the RTB itself was never relayed, because the same verdict suppressed the
+        /// broadcast. One session's host log: 175 such refusals, every ReturnToBase in
+        /// the file among them, and the guest's own report that he "would just lose the
+        /// ability to control his helicopters".
+        ///
+        /// A player's order has two marks the simulation's does not: it follows input
+        /// (<see cref="OrderRefusalNotice.RecentPlayerInput"/>), and it lands on what the
+        /// player has selected - order entry is always through the selection, and the
+        /// context menus of somebody else's unit are already replaced with a read-only
+        /// row. Both are required. Input alone is not enough: the host player is
+        /// clicking and dragging the camera constantly, so a guest's unit would still be
+        /// refused whenever the two happened to coincide.
+        ///
+        /// What this lets through is what a session with the lock OFF has always let
+        /// through - the simulation runs, and its orders are relayed to the team.
+        /// </summary>
+        private static bool HostSimulationIsCalling(ObjectBase unit)
+        {
+            if (!Plugin.Instance.CfgIsHost.Value) return false;
+            if (!OrderRefusalNotice.RecentPlayerInput) return true;
+
+            var selected = Singleton<RenderPosition>.InstanceExists()
+                ? Singleton<RenderPosition>.Instance.getSelectedObject() : null;
+            if (selected == null) return true;
+            if (ReferenceEquals(selected, unit)) return false;
+
+            // A formation-wide order is entered on one member and applied to all.
+            var formation = selected.Formation;
+            return formation == null || !ReferenceEquals(formation, unit.Formation);
+        }
+
+        private static bool Blocks(ObjectBase? unit, bool clickOnly)
         {
             if (unit == null) return false;
             // Weapons are never owned, and must never be REFUSED - the same exemption
@@ -118,7 +176,9 @@ namespace SeapowerMultiplayer
             if (!NetworkManager.Instance.IsEstablished) return false;
 
             byte o = OwnerOf(unit.UniqueID);
-            return o != Unowned && o != PlayerRegistry.LocalSlot;
+            if (o == Unowned || o == PlayerRegistry.LocalSlot) return false;
+
+            return clickOnly || !HostSimulationIsCalling(unit);
         }
 
         /// <summary>Host: was this slot entitled to send that order? What makes ownership
@@ -360,6 +420,33 @@ namespace SeapowerMultiplayer
             _pendingDelta.Clear();
             Epoch = 0;
             OwnershipRules.LockActive = false;
+        }
+
+        /// <summary>
+        /// Host: the mission this table described is gone. Empty it, and tell every
+        /// client to do the same.
+        ///
+        /// The table is keyed by unit id and ids are allocated deterministically, so a
+        /// second mission in the same lobby reuses most of the first one's. Left alone,
+        /// the next battle opened with those units already assigned to whoever held the
+        /// ids last time - some of the host's ships reading "Controlled by" a guest and
+        /// refusing the host's orders, with no way to take them back, because only the
+        /// owner is offered "send to player". The grants that normally fill the table
+        /// (<see cref="HostGrantTeamTo"/>) only ever claim what nobody holds, so they
+        /// could not correct it either. They run again as the new battle starts.
+        /// </summary>
+        public static void HostClearForNewMission()
+        {
+            if (!Plugin.Instance.CfgIsHost.Value) return;
+            if (_owner.Count == 0) return;
+
+            int had = _owner.Count;
+            _owner.Clear();
+            _pendingDelta.Clear();
+            Epoch++;
+            Plugin.Log.LogInfo($"[Ownership] Mission over - released {had} unit(s).");
+            if (NetworkManager.Instance.IsEstablished) HostSendFull();
+            MapUnitViewModelRegistry.NotifyAll();
         }
     }
 }
