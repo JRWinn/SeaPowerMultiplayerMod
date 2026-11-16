@@ -95,6 +95,7 @@ namespace SeapowerMultiplayer.UI
         public DelegateCommand EnableDiagnosticsCommand  { get; }
         public DelegateCommand DeclineDiagnosticsCommand { get; }
         public DelegateCommand DismissChangeNotesCommand { get; }
+        public DelegateCommand CycleFormationViewCommand { get; }
 
         public OverlayViewModel()
         {
@@ -177,6 +178,7 @@ namespace SeapowerMultiplayer.UI
             // Refresh straight away rather than on the next 100 ms tick, so the card
             // goes the instant it is clicked - same as DismissFatalCommand.
             DismissChangeNotesCommand = new DelegateCommand(_ => { ChangeNotes.Dismiss(); Refresh(true); });
+            CycleFormationViewCommand = new DelegateCommand(_ => { FormationManagerFilter.Cycle(); Refresh(true); });
         }
 
         // ── Panel chrome ─────────────────────────────────────────────────────
@@ -822,6 +824,16 @@ namespace SeapowerMultiplayer.UI
         private string _allyLockText = "";
         public string AllyLockText { get => _allyLockText; private set => Set(ref _allyLockText, value); }
 
+        // Formation Manager owner filter - see FormationManagerFilter.
+        private string _formationViewText = "";
+        public string FormationViewText { get => _formationViewText; private set => Set(ref _formationViewText, value); }
+
+        private Visibility _formationViewNotice = Visibility.Collapsed;
+        public Visibility FormationViewNoticeVisibility { get => _formationViewNotice; private set => Set(ref _formationViewNotice, value); }
+
+        private string _formationViewNoticeText = "";
+        public string FormationViewNoticeText { get => _formationViewNoticeText; private set => Set(ref _formationViewNoticeText, value); }
+
         private Visibility _consent = Visibility.Collapsed;
         public Visibility ConsentVisibility { get => _consent; private set => Set(ref _consent, value); }
 
@@ -861,7 +873,7 @@ namespace SeapowerMultiplayer.UI
 
             RefreshPopups(nm);
 
-            VersionText = $"SeaPower MP  v{PluginInfo.PLUGIN_VERSION}";
+            VersionText = $"SeaPower MP  v{PluginInfo.PLUGIN_VERSION}  build {BuildStamp.Value}";
             bool seated = nm.IsEstablished;
             TeamBadgeText = seated ? Teams.Name(PlayerRegistry.LocalTeam).ToUpperInvariant() : "";
             TeamBadgeVisibility = Vis(seated);
@@ -943,6 +955,13 @@ namespace SeapowerMultiplayer.UI
 
             // Fatal popup
             FatalPopupVisibility = Vis(Plugin.FatalInitError != null && !_fatalDismissed);
+
+            // Formation Manager view: the settings button's label, and the short
+            // notice that confirms a Ctrl+F8 press.
+            FormationViewText = FormationManagerFilter.ButtonText;
+            bool viewNotice = Time.unscaledTime < FormationManagerFilter.NoticeUntil;
+            FormationViewNoticeVisibility = Vis(viewNotice);
+            if (viewNotice) FormationViewNoticeText = FormationManagerFilter.NoticeText;
 
             // Order-refused banner - auto-expires, never dismissed.
             bool refused = Time.unscaledTime < OrderRefusalNotice.NoticeUntil;

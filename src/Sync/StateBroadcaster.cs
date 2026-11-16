@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using LiteNetLib;
 using SeaPower;
 using UnityEngine;
@@ -51,6 +52,16 @@ namespace SeapowerMultiplayer
             }
         }
 
+        // ── PausedToo ────────────────────────────────────────────────────────
+        //
+        // WaitForSeconds runs on scaled time, and the game pauses by setting the time
+        // scale to zero - so a loop built on it does not tick at all while paused.
+        // That is right for the loops that mirror the simulation (nothing moves), and
+        // wrong for the ones that carry what a PLAYER does, because a pause is exactly
+        // when players plan: an attack designation, a dragged waypoint or a doctrine
+        // change made while paused sat on the machine that made it until someone
+        // unpaused. Those loops wait on real time instead.
+
         // ── Weapon status / doctrine (both machines, own fleet) ─────────────
         //
         // The group-level doctrine paths write _weaponStatus directly instead of
@@ -60,10 +71,9 @@ namespace SeapowerMultiplayer
         // changes by hand, and keeps the sweep off the hot path.
         private IEnumerator WeaponStatusLoop()
         {
-            var wait = new WaitForSeconds(1f);
             while (true)
             {
-                yield return wait;
+                yield return new WaitForSecondsRealtime(1f); // real time - see PausedToo
                 if (!NetworkManager.Instance.IsEstablished) continue;
                 if (SimSyncManager.CurrentState != SimState.Synchronized) continue;
                 if (SessionManager.SceneLoading) continue;
@@ -84,10 +94,9 @@ namespace SeapowerMultiplayer
         // sit before the authoritative sim has it.
         private IEnumerator AttackDesignationLoop()
         {
-            var wait = new WaitForSeconds(0.25f);
             while (true)
             {
-                yield return wait;
+                yield return new WaitForSecondsRealtime(0.25f); // real time - see PausedToo
                 if (Plugin.Instance.CfgIsHost.Value) continue;
                 if (!NetworkManager.Instance.IsEstablished) continue;
                 if (SimSyncManager.CurrentState != SimState.Synchronized) continue;
@@ -179,10 +188,9 @@ namespace SeapowerMultiplayer
         // ── Waypoint drag flush (catches throttled final positions) ────────
         private IEnumerator WaypointFlushLoop()
         {
-            var wait = new WaitForSeconds(0.15f);
             while (true)
             {
-                yield return wait;
+                yield return new WaitForSecondsRealtime(0.15f); // real time - see PausedToo
                 if (!NetworkManager.Instance.IsConnected) continue;
 
                 foreach (var kvp in Patch_UserRootNode_UpdateSimulation._pending)
@@ -215,6 +223,49 @@ namespace SeapowerMultiplayer
 
                 BroadcastDamageCorrections();
             }
+        }
+
+        /// <summary>Units that have qualified for damage sync at least once this battle.</summary>
+        private static readonly HashSet<int> _everDamaged = new();
+
+        /// <summary>New battle: unit ids are reused, so last battle's set means nothing.</summary>
+        public static void ResetDamageTracking() => _everDamaged.Clear();
+
+        /// <summary>
+        /// Does this unit have damage the other machines need to hear about?
+        ///
+        /// The test used to be hull integrity alone, and IntegrityPercentage only sums
+        /// the flooding compartments. Fire and per-system damage travel in the same
+        /// message and nowhere else, so a hit that started a fire or knocked out a
+        /// radar while the hull stayed above 99% - a small warhead on a big ship, a
+        /// superstructure hit - was never sent: the ship burned on the host and looked
+        /// untouched to everyone else. And once damage control brought the hull back
+        /// over the line the updates stopped, leaving the last pre-repair picture in
+        /// place for the rest of the battle.
+        ///
+        /// So: fire and dead systems qualify too, and a unit that has qualified once
+        /// keeps being sent, which is what lets a repair or an extinguished fire reach
+        /// the other side.
+        /// </summary>
+        private static bool NeedsDamageSync(int unitId, Compartments comps)
+        {
+            if (_everDamaged.Contains(unitId)) return true;
+
+            bool damaged = comps._isSinking || comps.IntegrityPercentage <= 99f;
+            var systems = comps._systemCompartments;
+            for (int i = 0; !damaged && systems != null && i < systems.Length; i++)
+            {
+                var sc = systems[i];
+                if (sc == null) continue;
+                if (sc.FireSeverity > 0f) { damaged = true; break; }
+
+                var list = sc._listOfSystems;
+                for (int j = 0; list != null && j < list.Count; j++)
+                    if (list[j] != null && list[j].Inoperable.Value) { damaged = true; break; }
+            }
+
+            if (damaged) _everDamaged.Add(unitId);
+            return damaged;
         }
 
         private static void BroadcastDamageCorrections()
@@ -255,7 +306,7 @@ namespace SeapowerMultiplayer
                 if (comps == null) continue;
 
                 // Only send for units that have taken damage or are sinking
-                if (!comps._isSinking && comps.IntegrityPercentage > 99f) continue;
+                if (!NeedsDamageSync(unit.UniqueID, comps)) continue;
 
                 var msg = DamageStateSerializer.Capture(unit);
                 if (msg != null)

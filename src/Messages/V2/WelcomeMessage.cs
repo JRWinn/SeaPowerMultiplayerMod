@@ -29,6 +29,9 @@ namespace SeapowerMultiplayer.Messages
         /// Carried here so it binds the client from the handshake on, before the
         /// session save is sent. See <see cref="DebugMenuLock"/>.</summary>
         public bool   DisableF10Menu;
+        /// <summary>When the host's DLL was built - see the build-stamp note in
+        /// NetworkManager. Empty from a host that predates it.</summary>
+        public string HostBuild = "";
 
         public MessageType Type => MessageType.Welcome;
 
@@ -47,6 +50,7 @@ namespace SeapowerMultiplayer.Messages
             // contract, and Deserialize reads them back in exactly it.
             writer.Put(AssignedSlot);
             writer.Put(DisableF10Menu);
+            writer.Put(HostBuild ?? "");
         }
 
         public static WelcomeMessage Deserialize(NetDataReader reader) => new()
@@ -63,7 +67,8 @@ namespace SeapowerMultiplayer.Messages
             // AssignedTeam took the latter's wire position, and there is no session-wide
             // mode left for the former to carry.
             AssignedSlot    = reader.AvailableBytes > 0 ? reader.GetByte() : (byte)1,
-            DisableF10Menu  = reader.AvailableBytes > 0 && reader.GetBool()
+            DisableF10Menu  = reader.AvailableBytes > 0 && reader.GetBool(),
+            HostBuild       = reader.AvailableBytes > 0 ? reader.GetString() : "",
         };
     }
 }

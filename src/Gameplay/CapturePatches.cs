@@ -81,8 +81,18 @@ namespace SeapowerMultiplayer
             if (wb is Bomb && wb._ap != null && wb._ap._subType == Ammunition.Type.Paratrooper) return null;
             if (wb is Bomb && wb._ap != null && wb._ap._subType == Ammunition.Type.Sonobuoy) return 2;
             if (wb is Bomb) return 3;
+            if (IsRocketRound(wb)) return 4;
             return null;
         }
+
+        /// <summary>The unguided rounds that are neither missile, torpedo nor bomb:
+        /// RBU depth-charge rockets, the ASROC carrier rocket (its torpedo is captured
+        /// separately when it separates) and aircraft rocket pods. Each is its own
+        /// WeaponBase subclass, so none of the type tests above ever matched them and
+        /// they were not replicated at all - a guest watched a ship take RBU or rocket
+        /// hits with nothing leaving the launcher and nothing landing.</summary>
+        internal static bool IsRocketRound(WeaponBase wb)
+            => wb is RBU || wb is ASROC || wb is UnguidedRocket;
     }
 
     [HarmonyPatch(typeof(WeaponBase), nameof(WeaponBase.CommonLaunchSettings))]
@@ -187,7 +197,8 @@ namespace SeapowerMultiplayer
 
             int n = Relist(UnitRegistry.Missiles)
                   + Relist(UnitRegistry.Torpedoes)
-                  + Relist(UnitRegistry.Bombs);
+                  + Relist(UnitRegistry.Bombs)
+                  + Relist(UnitRegistry.Rockets);
 
             if (n > 0)
                 Plugin.Log.LogInfo($"[Session] Re-ledgered {n} weapon(s) still in flight — " +
@@ -1021,6 +1032,10 @@ namespace SeapowerMultiplayer
             if (!CaptureState.HostCaptureActive) return;
             if (obj == null) return;
             bool departed = obj.IsDespawned;
+            // ObjectBase.Disable() comes through here too. That is the mission parking
+            // a unit, not the unit leaving - UnitEnableSync announces it, and a despawn
+            // would have the guest destroy a copy it needs again when it is re-enabled.
+            if (!departed && obj.Disabled) return;
             if (!departed && !(obj is Aircraft) && !(obj is Helicopter)) return;
             if (!CaptureState.DespawnSent.Add(obj.UniqueID)) return; // kills already sent DestroyEvent
 

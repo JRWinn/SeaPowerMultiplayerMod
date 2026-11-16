@@ -108,11 +108,80 @@ namespace SeapowerMultiplayer
             if (Plugin.Instance.CfgIsHost.Value)
                 PlayerRegistry.HostSetReadyAndPublish(0, MissionIsLive);
 
+            TickHostMissionWatch();
+
             if (_retrySendAt <= 0f) return;
             if (Time.unscaledTime < _retrySendAt) return;
             _retrySendAt = 0f;
             Log.LogInfo($"[Session] Retry #{_retryCount}/{MaxRetries} — re-sending session sync");
             CaptureAndSend();
+        }
+
+        // ── Host: which mission the session is synced to ──────────────────────
+
+        /// <summary>Instance id of the SceneCreator the running session was synced
+        /// from, or 0 when there is no session. A mission load builds a new one.</summary>
+        private static int _syncedSceneId;
+
+        /// <summary>
+        /// Host: notice the mission ending or being replaced under a live session, and
+        /// put the session back to its lobby state.
+        ///
+        /// Nothing used to. SimState only ever returned to Idle on a disconnect or a
+        /// failed send, so after a battle the host stayed Synchronized through the
+        /// debrief, the menu and the next mission's load - and two things followed.
+        /// Deploying the SECOND mission in a lobby was classed as a mid-mission join
+        /// (<see cref="HostSendTo"/> asks "is a battle running?" and the answer was still
+        /// yes), which skips every new-battle reset: the mission-end latch stayed set,
+        /// so the guest never got the second battle's end screen, and the ownership
+        /// table carried over, so units that happened to reuse the first battle's ids
+        /// started out belonging to whoever held those ids before. And from the moment
+        /// the next mission finished loading the host streamed it at a guest that was
+        /// still sitting in the old one.
+        ///
+        /// Detected from the scene rather than tracked as a flag, for the reason
+        /// <see cref="MissionIsLive"/> gives: a mission the host loads or leaves on
+        /// their own goes through none of our code.
+        /// </summary>
+        private static void TickHostMissionWatch()
+        {
+            if (!Plugin.Instance.CfgIsHost.Value || SimSyncManager.CurrentState == SimState.Idle)
+            {
+                _syncedSceneId = 0;
+                return;
+            }
+
+            bool live = MissionIsLive;
+            int sceneId = live ? Singleton<SceneCreator>.Instance.GetInstanceID() : 0;
+
+            if (_syncedSceneId == 0)
+            {
+                // A capture always starts from a live mission, so this latches on the
+                // frame the session leaves Idle.
+                if (live) _syncedSceneId = sceneId;
+                return;
+            }
+            if (live && sceneId == _syncedSceneId) return;
+
+            Log.LogInfo("[Session] The host's mission ended or was replaced - session back to lobby state. " +
+                        "The next Deploy starts a new battle for everyone.");
+            _syncedSceneId = 0;
+
+            // Anything still in flight belonged to the mission that is gone.
+            _pendingSavePath = null;
+            _retrySendAt = 0f;
+            _retryCount = 0;
+            _joinDeadline = 0f;
+            _awaitingSlot = PlayerRegistry.NoSender;
+            _resumeTimeCompression = 0f;
+
+            SimSyncManager.Reset();
+            CaptureState.Clear();
+            HatchStateCapture.Clear();
+            Patch_V2_MissionEnd_Capture.Reset();
+            EntityCensusManager.Reset();
+            StateBroadcaster.ResetDamageTracking();
+            FormationOwnership.HostClearForNewMission();
         }
 
         /// <summary>
@@ -433,6 +502,7 @@ namespace SeapowerMultiplayer
                 HatchStateCapture.Clear();
                 Patch_V2_MissionEnd_Capture.Reset();
                 EntityCensusManager.Reset();
+                StateBroadcaster.ResetDamageTracking();
 
                 // Immediately after the clear, and only ever after it: put back the ledger
                 // entries for rounds that are in the air at this instant, so a mid-battle

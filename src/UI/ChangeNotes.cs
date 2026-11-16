@@ -20,7 +20,10 @@ namespace SeapowerMultiplayer.UI
     internal static class ChangeNotes
     {
         /// <summary>Identifies this set of notes. Compared for equality only.</summary>
-        internal const string Id = "2026-11-14-teammate-fixes";
+        // The build stamp is part of the id on purpose: every new build shows the
+        // card once, which is how a player sees at a glance that the file they were
+        // sent is the one that loaded.
+        internal const string Id = "notes-3 " + BuildStamp.Value;
 
         internal const string Title = "What's new in this build";
 
@@ -29,12 +32,17 @@ namespace SeapowerMultiplayer.UI
         // bullet glyph: the overlay font is the game's, and a hyphen cannot come out
         // as a missing-character box.
         internal const string Text =
-            "- Teammates now see enemy missiles and torpedoes the host has detected.\n" +
-            "- Aircraft that appear already in flight no longer show their landing gear down.\n" +
-            "- A teammate's helicopters and aircraft no longer get stuck when returning to base.";
+            "- Teammates see enemy missiles, torpedoes and rockets the host has detected.\n" +
+            "- Units a mission brings in later, like timed air strikes, now appear and move for teammates.\n" +
+            "- A refresh (Ctrl+F10) no longer lets the host run on while a teammate loads.\n" +
+            "- A teammate's aircraft no longer get stuck returning to base, and fly with gear up.\n" +
+            "- A second mission in the same lobby starts clean.\n" +
+            "- Flights are named after their loadout in the Formation Manager.\n" +
+            "- The Formation Manager lists only your own units. Ctrl+F8 switches to teammates' or everyone's.\n" +
+            "- You are warned if a player joins on a different build.";
 
         internal const string Footnote =
-            "Everyone in the session should be on this build.";
+            "Build " + BuildStamp.Value + ". Everyone in the session should be on this build.";
 
         /// <summary>Held back for the same boot hitch the consent prompt waits out, so
         /// the card does not flash up over a half-drawn main menu.</summary>

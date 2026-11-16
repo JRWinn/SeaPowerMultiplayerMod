@@ -239,10 +239,10 @@ namespace SeapowerMultiplayer
             if (Time.realtimeSinceStartup - p.EnterRealtime < WorldSampleGraceSec)
                 return true; // swallow - likely a stale pre-flip packet
 
-            var geo = new GeoPosition(e.LatDeg, e.LonDeg, e.HeightM);
-            Vector2 local = Utils.longLatToLocal(geo, Globals._currentCenterTile);
+            // A stream sample is in GeoCodec's wire encoding, not real lat/lon (only a
+            // spawn message carries that), so decode it the way the stream is decoded.
             FlipToAirborne(unit,
-                new Vector3(local.x, e.HeightM, local.y),
+                GeoCodec.ToUnity(e.LatDeg, e.LonDeg, e.HeightM),
                 GeoCodec.UnpackHeading(e.HeadingQ),
                 GeoCodec.UnpackSpeedKts(e.SpeedQ));
             Telemetry.Count("v2.deckFlipFromSample");

@@ -23,6 +23,9 @@ namespace SeapowerMultiplayer.Messages
         /// <summary>Host → client: a weapon's guidance wire parted (cut, broken, or
         /// stolen for a newer launch). SourceEntityId = the weapon.</summary>
         WeaponWireLost       = 14,
+        /// <summary>Host → client: the mission enabled (Param=1) or disabled (Param=0)
+        /// a unit it had authored - see UnitEnableSync. SourceEntityId = the unit.</summary>
+        UnitEnabledChanged   = 15,
     }
 
     /// <summary>

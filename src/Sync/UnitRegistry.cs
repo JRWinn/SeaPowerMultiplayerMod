@@ -19,6 +19,8 @@ namespace SeapowerMultiplayer
         private static readonly List<Missile>    _missiles    = new();
         private static readonly List<Torpedo>    _torpedoes   = new();
         private static readonly List<Bomb>       _bombs       = new();
+        // RBU rounds, ASROC carrier rockets, aircraft rockets - see CaptureState.IsRocketRound
+        private static readonly List<WeaponBase> _rockets     = new();
 
         // O(1) id lookup, replacing SceneCreator.FindObjectById (linear scan of
         // ObjectsByPvKey) and FindGlobalObjectById (Resources.FindObjectsOfTypeAll)
@@ -41,6 +43,7 @@ namespace SeapowerMultiplayer
         public static IReadOnlyList<Missile>    Missiles    => _missiles;
         public static IReadOnlyList<Torpedo>    Torpedoes   => _torpedoes;
         public static IReadOnlyList<Bomb>       Bombs       => _bombs;
+        public static IReadOnlyList<WeaponBase> Rockets     => _rockets;
 
         /// <summary>O(1) id lookup. Returns null for an unknown id or one whose
         /// object Unity has since destroyed (purged lazily - OnDestroy normally
@@ -77,6 +80,7 @@ namespace SeapowerMultiplayer
                 case Missile m:    _missiles.Add(m);    break;
                 case Torpedo t:    _torpedoes.Add(t);   break;
                 case Bomb b:       _bombs.Add(b);       break;
+                case WeaponBase w when CaptureState.IsRocketRound(w): _rockets.Add(w); break;
             }
         }
 
@@ -105,6 +109,7 @@ namespace SeapowerMultiplayer
                 case Missile m:    _missiles.Remove(m);    break;
                 case Torpedo t:    _torpedoes.Remove(t);   break;
                 case Bomb b:       _bombs.Remove(b);       break;
+                case WeaponBase w when CaptureState.IsRocketRound(w): _rockets.Remove(w); break;
             }
         }
 
@@ -147,6 +152,7 @@ namespace SeapowerMultiplayer
             _missiles.Clear();
             _torpedoes.Clear();
             _bombs.Clear();
+            _rockets.Clear();
         }
 
         /// <summary>

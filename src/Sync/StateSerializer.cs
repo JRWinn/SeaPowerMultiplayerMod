@@ -288,14 +288,12 @@ namespace SeapowerMultiplayer
                 if (StateSerializer.FindById(state.EntityId) != null)
                     continue; // already aligned
 
-                var geo = new GeoPosition
-                {
-                    _longitude = state.X,
-                    _latitude  = state.Z,
-                    _height    = state.Y,
-                };
-                Vector2 local = Utils.longLatToLocal(geo, Globals._currentCenterTile);
-                Vector3 worldPos = new Vector3(local.x, state.Y, local.y);
+                // X/Z come straight off the state stream, so they are GeoCodec's wire
+                // encoding and must be decoded with it. Utils.longLatToLocal wants real
+                // lat/lon, which is a different thing on game 0.9's Lambert world - and
+                // the match below has no distance limit, so a wrong position here does
+                // not fail, it renumbers whichever unit happens to be nearest.
+                Vector3 worldPos = Net2.GeoCodec.ToUnity(state.Z, state.X, state.Y);
 
                 var best = FindLocalByPosition(worldPos, state.Kind, alignExclude);
                 if (best != null && best.UniqueID != state.EntityId)
@@ -1525,6 +1523,10 @@ namespace SeapowerMultiplayer
                     if (!Plugin.Instance.CfgIsHost.Value
                         && (ReplicaRegistry.Find(msg.SourceEntityId) ?? StateSerializer.FindById(msg.SourceEntityId)) is WeaponBase wiredWeapon)
                         wiredWeapon.BreakWire();
+                    break;
+
+                case GameEventType.UnitEnabledChanged:
+                    UnitEnableSync.ClientApply(msg.SourceEntityId, msg.Param == 1f);
                     break;
 
                 // RESERVED, not removed. The transient selection lock these drove is

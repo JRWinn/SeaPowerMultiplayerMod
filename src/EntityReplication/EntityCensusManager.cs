@@ -35,6 +35,24 @@ namespace SeapowerMultiplayer
             if (Time.unscaledTime < _nextCensus) return;
             _nextCensus = Time.unscaledTime + CensusIntervalSec;
 
+            // No mission on this machine: nothing to take a census OF. The host
+            // leaving a battle for the menu tears the scene down without a despawn
+            // for anything in it, so the spawn ledger outlives the mission - and with
+            // the session still Synchronized this went on advertising it, and
+            // replaying its aircraft, torpedoes and decoys to a guest who asked, every
+            // cycle until that guest disconnected. Drop the ledger and stay quiet;
+            // the next mission's session sync starts it afresh.
+            if (NoMissionLoaded())
+            {
+                if (CaptureState.SpawnLedger.Count > 0)
+                {
+                    Plugin.Log.LogInfo($"[Census] No mission loaded - dropped {CaptureState.SpawnLedger.Count} " +
+                                       "stale spawn ledger entr(ies) from the last one.");
+                    CaptureState.Clear();
+                }
+                return;
+            }
+
             _msg.Reset();
             _msg.CensusSeq = ++_seq;
             _hostIds.Clear();
@@ -56,6 +74,17 @@ namespace SeapowerMultiplayer
             NetworkManager.Instance.BroadcastToClients(_msg, LiteNetLib.DeliveryMethod.ReliableOrdered);
             Telemetry.Count("v2.censusSent");
         }
+
+        /// <summary>No units of any kind exist. A mission that is loading never gets
+        /// here (the streamer loop skips while SceneLoading), and a live one always
+        /// has at least the ships or bases it started with - so an empty world is the
+        /// menu, or the gap between two missions.</summary>
+        private static bool NoMissionLoaded()
+            => UnitRegistry.Vessels.Count == 0
+            && UnitRegistry.Submarines.Count == 0
+            && UnitRegistry.AircraftList.Count == 0
+            && UnitRegistry.Helicopters.Count == 0
+            && UnitRegistry.LandUnits.Count == 0;
 
         private static void AddUnits<T>(UnitType kind, IReadOnlyList<T> units) where T : ObjectBase
         {

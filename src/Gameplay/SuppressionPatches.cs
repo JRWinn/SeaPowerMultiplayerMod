@@ -1359,6 +1359,45 @@ namespace SeapowerMultiplayer
         static bool Prefix(Bomb __instance) => !WeaponReplicaSuppression.Skip(__instance);
     }
 
+    // Unguided rocket rounds (RBU, ASROC carrier rocket, aircraft rockets) - same
+    // policy as bombs. The ASROC one matters beyond motion: its own update is what
+    // separates the torpedo, and the host's torpedo already arrives as a replica.
+    [HarmonyPatch(typeof(RBU), nameof(RBU.OnFixedUpdate))]
+    public static class Patch_V2_RbuFixedUpdate_Suppress
+    {
+        static bool Prefix(RBU __instance) => !WeaponReplicaSuppression.Skip(__instance);
+    }
+
+    [HarmonyPatch(typeof(RBU), nameof(RBU.OnUpdateEveryFrame))]
+    public static class Patch_V2_RbuEveryFrame_Suppress
+    {
+        static bool Prefix(RBU __instance) => !WeaponReplicaSuppression.Skip(__instance);
+    }
+
+    [HarmonyPatch(typeof(ASROC), nameof(ASROC.OnFixedUpdate))]
+    public static class Patch_V2_AsrocFixedUpdate_Suppress
+    {
+        static bool Prefix(ASROC __instance) => !WeaponReplicaSuppression.Skip(__instance);
+    }
+
+    [HarmonyPatch(typeof(ASROC), nameof(ASROC.OnUpdateEveryFrame))]
+    public static class Patch_V2_AsrocEveryFrame_Suppress
+    {
+        static bool Prefix(ASROC __instance) => !WeaponReplicaSuppression.Skip(__instance);
+    }
+
+    [HarmonyPatch(typeof(UnguidedRocket), nameof(UnguidedRocket.OnFixedUpdate))]
+    public static class Patch_V2_RocketFixedUpdate_Suppress
+    {
+        static bool Prefix(UnguidedRocket __instance) => !WeaponReplicaSuppression.Skip(__instance);
+    }
+
+    [HarmonyPatch(typeof(UnguidedRocket), nameof(UnguidedRocket.OnUpdateEveryFrame))]
+    public static class Patch_V2_RocketEveryFrame_Suppress
+    {
+        static bool Prefix(UnguidedRocket __instance) => !WeaponReplicaSuppression.Skip(__instance);
+    }
+
     /// <summary>Zero local damage on the client - DamageState/DestroyEvent carry
     /// the host's authoritative outcomes. (Explosion VFX are played directly by
     /// the impact handler, never through Blastzone.)</summary>

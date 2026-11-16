@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -64,6 +65,7 @@ namespace SeapowerMultiplayer
             }
             AppDomain.CurrentDomain.SetData(BootedKey, $"{loader} ({typeof(Plugin).Assembly.Location})");
             Log.LogInfo($"Loading via {loader} from {typeof(Plugin).Assembly.Location}");
+            ShutOutOtherCopies();
             // GUID-named, matching what BaseUnityPlugin used to create, so existing
             // installs keep their settings instead of silently reverting to defaults.
             Config = new ConfigFile(
@@ -72,6 +74,53 @@ namespace SeapowerMultiplayer
             var go = new GameObject(PluginInfo.PLUGIN_NAME);
             UnityEngine.Object.DontDestroyOnLoad(go);
             go.AddComponent<Plugin>();
+        }
+
+        /// <summary>
+        /// Keeps any other copy of this mod that loads later from starting.
+        ///
+        /// The AppDomain flag above only stops a copy that looks for it. Builds from
+        /// before it existed - the 1.0.4 on the Workshop among them - guard against a
+        /// second boot with a static, which a separately loaded copy cannot see. So a
+        /// test build in BepInEx\plugins beside a Workshop subscription ran BOTH: two
+        /// overlays, two network managers, every patch applied twice. Anchor Chain
+        /// loads its copy after BepInEx has started ours, so watch for an assembly of
+        /// our name and turn its Boot into a no-op before Anchor Chain calls it.
+        /// </summary>
+        private static void ShutOutOtherCopies()
+        {
+            var mine = typeof(Plugin).Assembly;
+            string name = mine.GetName().Name;
+            var skip = new HarmonyMethod(typeof(Plugin).GetMethod(
+                nameof(SkipOtherCopyBoot), BindingFlags.Static | BindingFlags.NonPublic));
+            var harmony = new Harmony(PluginInfo.PLUGIN_GUID + ".singlecopy");
+
+            AppDomain.CurrentDomain.AssemblyLoad += (_, e) =>
+            {
+                try
+                {
+                    var other = e.LoadedAssembly;
+                    if (other == mine || other.GetName().Name != name) return;
+
+                    var plugin = other.GetType(typeof(Plugin).FullName, false);
+                    if (plugin == null) return;
+                    foreach (var m in plugin.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                        if (m.Name == nameof(Boot))
+                            harmony.Patch(m, prefix: skip);
+                }
+                catch (Exception ex)
+                {
+                    Log.LogError($"Could not keep a second copy of the mod from starting: {ex.Message} " +
+                                 "Remove one copy (BepInEx\\plugins or the mod folder) and restart.");
+                }
+            };
+        }
+
+        private static bool SkipOtherCopyBoot(MethodBase __originalMethod)
+        {
+            Log.LogWarning($"Kept a second copy of the mod from starting: {__originalMethod.DeclaringType?.Assembly.Location}. " +
+                           $"This session runs {typeof(Plugin).Assembly.Location}.");
+            return false;
         }
 
         /// <summary>
@@ -154,6 +203,8 @@ namespace SeapowerMultiplayer
         internal ConfigEntry<bool>   CfgShareDiagnostics = null!;
         internal ConfigEntry<bool>   CfgDiagnosticsAsked = null!;
         internal ConfigEntry<string> CfgSeenChangeNotes = null!;
+        internal ConfigEntry<bool>   CfgAutoNameFlights = null!;
+        internal ConfigEntry<string> CfgFormationManagerView = null!;
         internal ConfigEntry<string> CfgInstallId        = null!;
         internal ConfigEntry<string> CfgDiagnosticsUrl   = null!;
 
@@ -276,6 +327,13 @@ namespace SeapowerMultiplayer
                 "Internal: the one-time consent prompt has been shown. Delete to see it again.");
             CfgSeenChangeNotes = Config.Bind("UI", "SeenChangeNotes", "",
                 "Internal: id of the last 'what's new' card dismissed at launch. Delete to see it again.");
+            CfgAutoNameFlights = Config.Bind("UI", "AutoNameFlightsByLoadout", true,
+                "Put the loadout in front of an air formation's name (\"Air to Air - Red-1 Flight\"), so " +
+                "flights can be told apart in the Formation Manager. Host decides in a session; a " +
+                "formation somebody has named by hand is never touched.");
+            CfgFormationManagerView = Config.Bind("UI", "FormationManagerView", "Mine",
+                "Whose formations the game's Formation Manager lists in a session with the unit lock " +
+                "on: Mine, Teammates or Everyone. Ctrl+F8 steps through them in game.");
             CfgInstallId = Config.Bind("Diagnostics", "InstallId", "",
                 "Internal: random anonymous id, generated the first time diagnostics are enabled. " +
                 "Quote it to have your data deleted. Delete this line to get a new one.");
@@ -326,7 +384,7 @@ namespace SeapowerMultiplayer
                 return;
             }
 
-            Log.LogInfo($"SeapowerMultiplayer v{PluginInfo.PLUGIN_VERSION} loaded.");
+            Log.LogInfo($"SeapowerMultiplayer v{PluginInfo.PLUGIN_VERSION} (build {BuildStamp.Value}) loaded.");
             Log.LogInfo($"Transport: {CfgTransport.Value}  Mode: {(CfgIsHost.Value ? "HOST" : "CLIENT")}  Port: {CfgPort.Value}");
             Log.LogInfo("Press Ctrl+F9 to toggle the multiplayer overlay (works in the main menu too).");
 
@@ -530,6 +588,12 @@ namespace SeapowerMultiplayer
             // UnitLockManager's transient selection lock is gone; its refusal-notice
             // half lives on here under its own name.
             OrderRefusalNotice.SampleInput();
+            // Guest orders that changed inside their rate floor, sent once it lifts.
+            OrderDeduplicator.Tick();
+            // Flights named after their loadout.
+            FormationAutoName.Tick();
+            // Ctrl+F8, and keeping the Formation Manager's owner filter in step.
+            SeapowerMultiplayer.UI.FormationManagerFilter.Tick();
 
             // Ctrl+F11 motion trace. Last of the per-frame hooks so the FRAME row
             // records the transform the replica drivers actually left behind.

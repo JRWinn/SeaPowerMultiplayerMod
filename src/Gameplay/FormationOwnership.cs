@@ -421,5 +421,32 @@ namespace SeapowerMultiplayer
             Epoch = 0;
             OwnershipRules.LockActive = false;
         }
+
+        /// <summary>
+        /// Host: the mission this table described is gone. Empty it, and tell every
+        /// client to do the same.
+        ///
+        /// The table is keyed by unit id and ids are allocated deterministically, so a
+        /// second mission in the same lobby reuses most of the first one's. Left alone,
+        /// the next battle opened with those units already assigned to whoever held the
+        /// ids last time - some of the host's ships reading "Controlled by" a guest and
+        /// refusing the host's orders, with no way to take them back, because only the
+        /// owner is offered "send to player". The grants that normally fill the table
+        /// (<see cref="HostGrantTeamTo"/>) only ever claim what nobody holds, so they
+        /// could not correct it either. They run again as the new battle starts.
+        /// </summary>
+        public static void HostClearForNewMission()
+        {
+            if (!Plugin.Instance.CfgIsHost.Value) return;
+            if (_owner.Count == 0) return;
+
+            int had = _owner.Count;
+            _owner.Clear();
+            _pendingDelta.Clear();
+            Epoch++;
+            Plugin.Log.LogInfo($"[Ownership] Mission over - released {had} unit(s).");
+            if (NetworkManager.Instance.IsEstablished) HostSendFull();
+            MapUnitViewModelRegistry.NotifyAll();
+        }
     }
 }

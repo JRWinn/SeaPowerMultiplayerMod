@@ -580,6 +580,10 @@ namespace SeapowerMultiplayer.UI
               <TextBlock Style=""{StaticResource Dim}"" Visibility=""{Binding NoTeammateNoticeVisibility}""
                          Text=""Only shared with teammates - never with an opponent""/>
 
+              <TextBlock Text=""Formation Manager (Ctrl+F8)"" Style=""{StaticResource Dim}"" Margin=""0,8,0,2""/>
+              <Button Style=""{StaticResource Btn}"" Content=""{Binding FormationViewText}""
+                      Command=""{Binding CycleFormationViewCommand}""/>
+
               <!-- Top level, not under Advanced: a consent setting has to be
                    findable without expanding a disclosure triangle. -->
               <TextBlock Text=""Diagnostics"" Style=""{StaticResource Dim}"" Margin=""0,8,0,2""/>
@@ -811,6 +815,16 @@ namespace SeapowerMultiplayer.UI
       <Button Style=""{StaticResource Btn}"" Content=""Got it"" Margin=""0,10,0,0""
               Command=""{Binding DismissChangeNotesCommand}""/>
     </StackPanel>
+  </Border>
+
+  <!-- Formation Manager view: confirms a Ctrl+F8 press, then goes away. -->
+  <Border Width=""470"" CornerRadius=""6"" Padding=""12,8""
+          HorizontalAlignment=""Center"" VerticalAlignment=""Bottom"" Margin=""0,0,0,170""
+          Background=""{StaticResource Bg.Alert}""
+          BorderBrush=""{StaticResource Edge}"" BorderThickness=""1""
+          Visibility=""{Binding FormationViewNoticeVisibility}"">
+    <TextBlock Text=""{Binding FormationViewNoticeText}"" HorizontalAlignment=""Center""
+               TextWrapping=""Wrap""/>
   </Border>
 
   <!-- Ally lock: fires from ordinary clicking, so it auto-expires and never
